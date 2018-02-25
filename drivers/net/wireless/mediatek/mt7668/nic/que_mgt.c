@@ -525,15 +525,21 @@ VOID qmActivateStaRec(IN P_ADAPTER_T prAdapter, IN P_STA_RECORD_T prStaRec)
 VOID qmDeactivateStaRec(IN P_ADAPTER_T prAdapter, IN P_STA_RECORD_T prStaRec)
 {
 	UINT_32 i;
-	P_MSDU_INFO_T prFlushedTxPacketList = NULL;
 
 	if (!prStaRec)
 		return;
 	/* 4 <1> Flush TX queues */
-	prFlushedTxPacketList = qmFlushStaTxQueues(prAdapter, prStaRec->ucIndex);
+	if (HAL_IS_TX_DIRECT(prAdapter)) {
+		nicTxDirectClearStaPsQ(prAdapter, prStaRec->ucIndex);
+	} else {
+		P_MSDU_INFO_T prFlushedTxPacketList = NULL;
 
-	if (prFlushedTxPacketList)
-		wlanProcessQueuedMsduInfo(prAdapter, prFlushedTxPacketList);
+		prFlushedTxPacketList = qmFlushStaTxQueues(prAdapter, prStaRec->ucIndex);
+
+		if (prFlushedTxPacketList)
+			wlanProcessQueuedMsduInfo(prAdapter, prFlushedTxPacketList);
+	}
+
 	/* 4 <2> Flush RX queues and delete RX BA agreements */
 	for (i = 0; i < CFG_RX_MAX_BA_TID_NUM; i++) {
 		/* Delete the RX BA entry with TID = i */
@@ -2243,6 +2249,10 @@ P_SW_RFB_T qmHandleRxPackets(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwRfbList
 	PUINT_8 pucEthDestAddr;
 	BOOLEAN fgIsBMC, fgIsHTran;
 	BOOLEAN fgMicErr;
+#if CFG_SUPPORT_REPLAY_DETECTION
+	UINT_8 ucBssIndexRly = 0;
+	P_BSS_INFO_T prBssInfoRly = NULL;
+#endif
 
 	/* DbgPrint("QM: Enter qmHandleRxPackets()\n"); */
 
@@ -2399,6 +2409,29 @@ P_SW_RFB_T qmHandleRxPackets(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwRfbList
 
 
 		/* Todo:: Move the data class error check here */
+
+#if CFG_SUPPORT_REPLAY_DETECTION
+		if (prCurrSwRfb->prStaRec) {
+			ucBssIndexRly = prCurrSwRfb->prStaRec->ucBssIndex;
+			prBssInfoRly = GET_BSS_INFO_BY_INDEX(prAdapter, ucBssIndexRly);
+			if (!IS_BSS_ACTIVE(prBssInfoRly)) {
+				DBGLOG(QM, INFO,
+					"Mark NULL the Packet for inactive Bss %u\n",
+					ucBssIndexRly);
+				prCurrSwRfb->eDst = RX_PKT_DESTINATION_NULL;
+				QUEUE_INSERT_TAIL(prReturnedQue, (P_QUE_ENTRY_T) prCurrSwRfb);
+				continue;
+			}
+			if (fgIsBMC
+				&& prBssInfoRly
+				&& (IS_BSS_AIS(prBssInfoRly) || IS_BSS_P2P(prBssInfoRly))
+				&& qmHandleRxReplay(prAdapter, prCurrSwRfb)) {
+				prCurrSwRfb->eDst = RX_PKT_DESTINATION_NULL;
+				QUEUE_INSERT_TAIL(prReturnedQue, (P_QUE_ENTRY_T) prCurrSwRfb);
+				continue;
+			}
+		}
+#endif
 
 		if (prCurrSwRfb->fgReorderBuffer && !fgIsBMC && fgIsHTran) {
 			/* If this packet should dropped or indicated to the host immediately,
@@ -4162,20 +4195,20 @@ VOID mqmProcessScanResult(IN P_ADAPTER_T prAdapter, IN P_BSS_DESC_T prScanResult
 					if (IE_LEN(pucIE) != 24)
 						break;	/* WMM Param IE with a wrong length */
 
-					prStaRec->fgIsWmmSupported = TRUE;
-					prStaRec->fgIsUapsdSupported =
-						    (((((P_IE_WMM_PARAM_T) pucIE)->ucQosInfo) & WMM_QOS_INFO_UAPSD) ?
-						     TRUE : FALSE);
+                        prStaRec->fgIsWmmSupported = TRUE;
+                        prStaRec->fgIsUapsdSupported =
+					    (((((P_IE_WMM_PARAM_T) pucIE)->ucQosInfo) & WMM_QOS_INFO_UAPSD) ?
+					     TRUE : FALSE);
 					break;
 
 				case VENDOR_OUI_SUBTYPE_WMM_INFO:
 					if (IE_LEN(pucIE) != 7)
 						break;	/* WMM Info IE with a wrong length */
 
-					prStaRec->fgIsWmmSupported = TRUE;
-					prStaRec->fgIsUapsdSupported =
-						    (((((P_IE_WMM_INFO_T) pucIE)->ucQosInfo) & WMM_QOS_INFO_UAPSD) ?
-						     TRUE : FALSE);
+                        prStaRec->fgIsWmmSupported = TRUE;
+                        prStaRec->fgIsUapsdSupported =
+					    (((((P_IE_WMM_INFO_T) pucIE)->ucQosInfo) & WMM_QOS_INFO_UAPSD) ?
+					     TRUE : FALSE);
 					break;
 
 				default:
@@ -4759,8 +4792,12 @@ VOID qmHandleEventBssAbsencePresence(IN P_ADAPTER_T prAdapter, IN P_WIFI_EVENT_T
 		QM_DBG_CNT_INC(&(prAdapter->rQM), QM_DBG_CNT_28);
 	}
 	/* From Absent to Present */
-	if ((fgIsNetAbsentOld) && (!prBssInfo->fgIsNetAbsent))
-		kalSetEvent(prAdapter->prGlueInfo);
+	if ((fgIsNetAbsentOld) && (!prBssInfo->fgIsNetAbsent)) {
+		if (HAL_IS_TX_DIRECT(prAdapter))
+			nicTxDirectStartCheckQTimer(prAdapter);
+		else
+			kalSetEvent(prAdapter->prGlueInfo);
+	}
 }
 
 /*----------------------------------------------------------------------------*/
@@ -4799,8 +4836,12 @@ VOID qmHandleEventStaChangePsMode(IN P_ADAPTER_T prAdapter, IN P_WIFI_EVENT_T pr
 		DBGLOG(QM, INFO, "PS=%d,%d\n", prEventStaChangePsMode->ucStaRecIdx, prStaRec->fgIsInPS);
 
 		/* From PS to Awake */
-		if ((fgIsInPSOld) && (!prStaRec->fgIsInPS))
-			kalSetEvent(prAdapter->prGlueInfo);
+		if ((fgIsInPSOld) && (!prStaRec->fgIsInPS)) {
+			if (HAL_IS_TX_DIRECT(prAdapter))
+				nicTxDirectStartCheckQTimer(prAdapter);
+			else
+				kalSetEvent(prAdapter->prGlueInfo);
+		}
 	}
 }
 
@@ -4833,7 +4874,10 @@ VOID qmHandleEventStaUpdateFreeQuota(IN P_ADAPTER_T prAdapter, IN P_WIFI_EVENT_T
 					  prEventStaUpdateFreeQuota->ucUpdateMode,
 					  prEventStaUpdateFreeQuota->ucFreeQuota);
 
-			kalSetEvent(prAdapter->prGlueInfo);
+			if (HAL_IS_TX_DIRECT(prAdapter))
+				nicTxDirectStartCheckQTimer(prAdapter);
+			else
+				kalSetEvent(prAdapter->prGlueInfo);
 		}
 #if 0
 		DBGLOG(QM, TRACE,
@@ -5906,4 +5950,160 @@ VOID qmResetTcControlResource(IN P_ADAPTER_T prAdapter)
 	prQM->u4ResidualTcResource = u4TotalTcResource - u4TotalGurantedTcResource;
 
 }
+#endif
+
+
+#if CFG_SUPPORT_REPLAY_DETECTION
+/* To change PN number to UINT64 */
+#define CCMPTSCPNNUM	6
+BOOLEAN qmRxPNtoU64(PUINT_8 pucPN, UINT_8 uPNNum, PUINT_64 pu8Rets)
+{
+	UINT_8 ucCount = 0;
+	UINT_64 u8Data = 0;
+	UINT_64 ucTmp = 0;
+
+	if (!pu8Rets) {
+		DBGLOG(QM, ERROR, "Please input valid pu8Rets\n");
+		return FALSE;
+	}
+
+	if (uPNNum > CCMPTSCPNNUM) {
+		DBGLOG(QM, ERROR, "Please input valid uPNNum:%d\n", uPNNum);
+		return FALSE;
+	}
+
+	*pu8Rets = 0;
+	for (; ucCount < uPNNum; ucCount++) {
+		ucTmp = pucPN[ucCount];
+		u8Data = ucTmp << 8*ucCount;
+		*pu8Rets +=  u8Data;
+	}
+	return TRUE;
+}
+
+/* To check PN/TSC between RxStatus and local record. return TRUE if PNS is not bigger than PNT */
+BOOLEAN qmRxDetectReplay(PUINT_8 pucPNS, PUINT_8 pucPNT)
+{
+	UINT_64 u8RxNum = 0;
+	UINT_64 u8LocalRec = 0;
+
+	if (!pucPNS || !pucPNT) {
+		DBGLOG(QM, ERROR, "Please input valid PNS:%p and PNT:%p\n", pucPNS, pucPNT);
+		return TRUE;
+	}
+
+	if (!qmRxPNtoU64(pucPNS, CCMPTSCPNNUM, &u8RxNum)
+		|| !qmRxPNtoU64(pucPNT, CCMPTSCPNNUM, &u8LocalRec)) {
+		DBGLOG(QM, ERROR, "PN2U64 failed\n");
+		return TRUE;
+	}
+	/* PN overflow ? */
+
+	return !(u8RxNum > u8LocalRec);
+}
+
+/* TO filter broadcast and multicast data packet replay issue. */
+BOOLEAN qmHandleRxReplay(P_ADAPTER_T prAdapter, P_SW_RFB_T prSwRfb)
+{
+	PUINT_8 pucPN = NULL;
+	UINT_8 ucKeyID = 0;				/* 0~4 */
+	UINT_8 ucSecMode = CIPHER_SUITE_NONE;		/* CIPHER_SUITE_NONE~CIPHER_SUITE_GCMP */
+	P_GLUE_INFO_T prGlueInfo = NULL;
+	P_GL_WPA_INFO_T prWpaInfo = NULL;
+	struct SEC_DETECT_REPLAY_INFO *prDetRplyInfo = NULL;
+	P_HW_MAC_RX_DESC_T prRxStatus = NULL;
+	UINT_8 ucBssIndex = 0;
+	P_BSS_INFO_T prBssInfo = NULL;
+	UINT_8 ucCheckZeroPN;
+	UINT_8 i;
+
+	if (!prAdapter)
+		return TRUE;
+	if (prSwRfb->u2PacketLen <= ETHER_HEADER_LEN)
+		return TRUE;
+
+	ucBssIndex = prSwRfb->prStaRec->ucBssIndex;
+	prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, ucBssIndex);
+
+	ASSERT(prBssInfo);
+
+	prGlueInfo = prAdapter->prGlueInfo;
+	prWpaInfo = &prGlueInfo->rWpaInfo;
+
+	if (!(prSwRfb->ucGroupVLD & BIT(RX_GROUP_VLD_1)))
+		return FALSE;
+
+	/* BMC only need check CCMP and TKIP Cipher suite */
+	prRxStatus = prSwRfb->prRxStatus;
+	ucSecMode = HAL_RX_STATUS_GET_SEC_MODE(prRxStatus);
+	if (ucSecMode != CIPHER_SUITE_CCMP
+		&& ucSecMode != CIPHER_SUITE_TKIP) {
+		DBGLOG(QM, TRACE, "SecMode: %d and CipherGroup: %d, no need check replay\n",
+				ucSecMode, prWpaInfo->u4CipherGroup);
+#if 0
+		if (!(prSwRfb->ucGroupVLD & BIT(RX_GROUP_VLD_1))) {
+			DBGLOG(QM, ERROR, "Group 1 invalid\n");
+			return TRUE;
+		}
+#endif
+		return FALSE;
+	}
+
+	ucKeyID = HAL_RX_STATUS_GET_KEY_ID(prRxStatus);
+	if (ucKeyID >= MAX_KEY_NUM) {
+		DBGLOG(QM, ERROR, "KeyID: %d error\n", ucKeyID);
+		return TRUE;
+	}
+
+	prDetRplyInfo = &prBssInfo->rDetRplyInfo;
+
+#if 0
+	if (prDetRplyInfo->arReplayPNInfo[ucKeyID].fgFirstPkt) {
+		prDetRplyInfo->arReplayPNInfo[ucKeyID].fgFirstPkt = FALSE;
+		HAL_RX_STATUS_GET_PN(prSwRfb->prRxStatusGroup1, prDetRplyInfo->arReplayPNInfo[ucKeyID].auPN);
+		DBGLOG(QM, INFO,
+			"First check packet. Key ID:0x%x\n", ucKeyID);
+		return FALSE;
+	}
+#endif
+
+	pucPN = prSwRfb->prRxStatusGroup1->aucPN;
+	DBGLOG(QM, TRACE,
+			"BC packet 0x%x:0x%x:0x%x:0x%x:0x%x:0x%x--0x%x:0x%x:0x%x:0x%x:0x%x:0x%x\n",
+			pucPN[0], pucPN[1], pucPN[2], pucPN[3], pucPN[4], pucPN[5],
+			prDetRplyInfo->arReplayPNInfo[ucKeyID].auPN[0],
+			prDetRplyInfo->arReplayPNInfo[ucKeyID].auPN[1],
+			prDetRplyInfo->arReplayPNInfo[ucKeyID].auPN[2],
+			prDetRplyInfo->arReplayPNInfo[ucKeyID].auPN[3],
+			prDetRplyInfo->arReplayPNInfo[ucKeyID].auPN[4],
+			prDetRplyInfo->arReplayPNInfo[ucKeyID].auPN[5]);
+
+	if (prDetRplyInfo->fgKeyRscFresh == TRUE) {
+
+		/* PN non-fresh setting */
+		prDetRplyInfo->fgKeyRscFresh = FALSE;
+		ucCheckZeroPN = 0;
+
+		for (i = 0; i < 8; i++) {
+			if (prSwRfb->prRxStatusGroup1->aucPN[i] == 0x0)
+				ucCheckZeroPN++;
+		}
+
+		/* for AP start PN from 0, bypass PN check and update */
+		if (ucCheckZeroPN == 8) {
+			DBGLOG(QM, WARN, "Fresh BC_PN with AP PN=0\n");
+			return FALSE;
+		}
+	}
+
+	if (qmRxDetectReplay(pucPN, prDetRplyInfo->arReplayPNInfo[ucKeyID].auPN)) {
+		DBGLOG(QM, WARN, "Drop BC replay packet!\n");
+		return TRUE;
+	}
+
+	HAL_RX_STATUS_GET_PN(prSwRfb->prRxStatusGroup1, prDetRplyInfo->arReplayPNInfo[ucKeyID].auPN);
+
+	return FALSE;
+}
+
 #endif

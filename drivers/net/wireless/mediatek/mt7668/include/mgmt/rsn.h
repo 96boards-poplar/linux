@@ -132,6 +132,15 @@
 #define RSN_AUTH_MFP_REQUIRED   2	/* MFP required */
 #endif
 
+
+#define GTK_REKEY_CMD_MODE_OFFLOAD_ON		0
+#define GTK_REKEY_CMD_MODE_OFLOAD_OFF		1
+#define GTK_REKEY_CMD_MODE_SET_BCMC_PN		2
+#define GTK_REKEY_CMD_MODE_GET_BCMC_PN		3
+#define GTK_REKEY_CMD_MODE_RPY_OFFLOAD_ON	4
+#define GTK_REKEY_CMD_MODE_RPY_OFFLOAD_OFF	5
+
+
 /*******************************************************************************
 *                             D A T A   T Y P E S
 ********************************************************************************

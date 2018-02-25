@@ -639,7 +639,17 @@ WLAN_STATUS aaaFsmRunEventRxAssoc(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwRf
 
 				/* If (Re)association fail, remove sta record and use class error to handle sta */
 				prStaRec->eAuthAssocState = AA_STATE_IDLE;
+				/* Remove from client list if it was previously associated */
+				if ((prStaRec->ucStaState > STA_STATE_1) && prAdapter->fgIsP2PRegistered
+					&& (IS_STA_IN_P2P(prStaRec))) {
+					P_BSS_INFO_T prBssInfo = NULL;
 
+					prBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, prStaRec->ucBssIndex);
+					if (prBssInfo) {
+						DBGLOG(AAA, INFO, "Remove client!\n");
+						bssRemoveClient(prAdapter, prBssInfo, prStaRec);
+					}
+				}
 				/* NOTE(Kevin): Better to change state here, not at TX Done */
 				cnmStaRecChangeState(prAdapter, prStaRec, STA_STATE_2);
 			}

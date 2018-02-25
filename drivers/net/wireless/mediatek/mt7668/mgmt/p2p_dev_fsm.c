@@ -53,7 +53,7 @@
 #include "p2p_dev_state.h"
 #if CFG_ENABLE_WIFI_DIRECT
 
-#if !DBG_DISABLE_ALL_LOG
+#if 1
 /*lint -save -e64 Type mismatch */
 static PUINT_8 apucDebugP2pDevState[P2P_DEV_STATE_NUM] = {
 	(PUINT_8) DISP_STRING("P2P_DEV_STATE_IDLE"),
@@ -102,8 +102,13 @@ UINT_8 p2pDevFsmInit(IN P_ADAPTER_T prAdapter)
 
 			prP2pBssInfo->eBand = BAND_2G4;
 			prP2pBssInfo->eDBDCBand = ENUM_BAND_0;
-			prP2pBssInfo->ucWmmQueSet = DBDC_2G_WMM_INDEX;
-
+#if (CFG_HW_WMM_BY_BSS == 1)
+			prP2pBssInfo->ucWmmQueSet = MAX_HW_WMM_INDEX;
+#else
+			prP2pBssInfo->ucWmmQueSet =
+				(prAdapter->rWifiVar.ucDbdcMode == DBDC_MODE_DISABLED) ?
+				DBDC_5G_WMM_INDEX : DBDC_2G_WMM_INDEX;
+#endif
 			prP2pBssInfo->ucPhyTypeSet = prAdapter->rWifiVar.ucAvailablePhyTypeSet & PHY_TYPE_SET_802_11GN;
 
 			prP2pBssInfo->ucNonHTBasicPhyType = (UINT_8)

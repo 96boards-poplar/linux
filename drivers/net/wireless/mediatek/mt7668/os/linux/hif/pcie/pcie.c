@@ -242,11 +242,96 @@ static void mtk_pci_remove(struct pci_dev *pdev)
 
 static int mtk_pci_suspend(struct pci_dev *pdev, pm_message_t state)
 {
+	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T)pci_get_drvdata(pdev);
+
+	if (!prGlueInfo) {
+		DBGLOG(HAL, ERROR, "pci_get_drvdata fail!\n");
+		return -1;
+	}
+
+	wlanSuspendPmHandle(prGlueInfo);
+
+	if (prGlueInfo->prAdapter->fgIsFwOwn == FALSE)
+		RECLAIM_POWER_CONTROL_TO_PM(prGlueInfo->prAdapter, FALSE);
+
+	pci_save_state(pdev);
+	pci_set_power_state(pdev, pci_choose_state(pdev, state));
+	prGlueInfo->prAdapter->fgIsFwOwn = TRUE;
+
+	DBGLOG(HAL, STATE, "mtk_pci_suspend() done!\n");
 	return 0;
 }
 
 int mtk_pci_resume(struct pci_dev *pdev)
 {
+	UINT_32 i;
+	UINT_32 phy_addr, offset;
+	RTMP_TX_RING *tx_ring;
+	RTMP_RX_RING *rx_ring;
+	P_GL_HIF_INFO_T prHifInfo;
+	P_GLUE_INFO_T prGlueInfo = NULL;
+
+	prGlueInfo = (P_GLUE_INFO_T)pci_get_drvdata(pdev);
+
+	if (!prGlueInfo) {
+		DBGLOG(HAL, ERROR, "pci_get_drvdata fail!\n");
+		return -1;
+	}
+
+	prHifInfo = &prGlueInfo->rHifInfo;
+
+	pci_set_power_state(pdev, PCI_D0);
+	pci_restore_state(pdev);
+
+	/* Restore PDMA settings */
+	for (i = 0; i < NUM_OF_TX_RING; i++) {
+		tx_ring = &prHifInfo->TxRing[i];
+		offset = i * MT_RINGREG_DIFF;
+		phy_addr = prHifInfo->TxRing[i].Cell[0].AllocPa;
+		tx_ring->TxSwUsedIdx = 0;
+		tx_ring->u4UsedCnt = 0;
+		tx_ring->TxCpuIdx = 0;
+		tx_ring->hw_desc_base = MT_TX_RING_BASE + offset;
+		tx_ring->hw_cidx_addr = MT_TX_RING_CIDX + offset;
+		tx_ring->hw_didx_addr = MT_TX_RING_DIDX + offset;
+		tx_ring->hw_cnt_addr = MT_TX_RING_CNT + offset;
+		kalDevRegWrite(prGlueInfo, tx_ring->hw_desc_base, phy_addr);
+		kalDevRegWrite(prGlueInfo, tx_ring->hw_cidx_addr, tx_ring->TxCpuIdx);
+		kalDevRegWrite(prGlueInfo, tx_ring->hw_cnt_addr, TX_RING_SIZE);
+	}
+
+	for (i = 0; i < NUM_OF_RX_RING; i++) {
+		rx_ring = &prHifInfo->RxRing[i];
+		offset = i * MT_RINGREG_DIFF;
+		phy_addr = rx_ring->Cell[0].AllocPa;
+		rx_ring->RxSwReadIdx = 0;
+		rx_ring->RxCpuIdx = rx_ring->u4RingSize - 1;
+		rx_ring->hw_desc_base = MT_RX_RING_BASE + offset;
+		rx_ring->hw_cidx_addr = MT_RX_RING_CIDX + offset;
+		rx_ring->hw_didx_addr = MT_RX_RING_DIDX + offset;
+		rx_ring->hw_cnt_addr = MT_RX_RING_CNT + offset;
+		kalDevRegWrite(prGlueInfo, rx_ring->hw_desc_base, phy_addr);
+		kalDevRegWrite(prGlueInfo, rx_ring->hw_cidx_addr, rx_ring->RxCpuIdx);
+		kalDevRegWrite(prGlueInfo, rx_ring->hw_cnt_addr, rx_ring->u4RingSize);
+	}
+
+	halWpdmaSetup(prGlueInfo, TRUE);
+	halEnableInterrupt(prGlueInfo->prAdapter);
+	DBGLOG(HAL, STATE, "PDMA restore done\n");
+
+	if (prGlueInfo->prAdapter->fgIsFwOwn == FALSE) {
+		prGlueInfo->prAdapter->fgIsFwOwn = TRUE;
+		halSetDriverOwn(prGlueInfo->prAdapter);
+	} else {
+		ACQUIRE_POWER_CONTROL_FROM_PM(prGlueInfo->prAdapter);
+	}
+
+	kalMsleep(5);
+
+	wlanResumePmHandle(prGlueInfo);
+
+	DBGLOG(HAL, STATE, "mtk_pci_resume done\n");
+
 	return 0;
 }
 

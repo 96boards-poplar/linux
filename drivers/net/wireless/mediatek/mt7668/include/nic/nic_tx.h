@@ -1509,6 +1509,18 @@ void nicTxMsduDoneCb(IN P_GLUE_INFO_T prGlueInfo, IN P_QUE_T prQue);
 
 VOID nicTxCancelSendingCmd(IN P_ADAPTER_T prAdapter, IN P_CMD_INFO_T prCmdInfo);
 
+/* TX Direct functions : BEGIN */
+VOID nicTxDirectStartCheckQTimer(IN P_ADAPTER_T prAdapter);
+VOID nicTxDirectClearSkbQ(IN P_ADAPTER_T prAdapter);
+VOID nicTxDirectClearHifQ(IN P_ADAPTER_T prAdapter);
+VOID nicTxDirectClearStaPsQ(IN P_ADAPTER_T prAdapter, UINT_8 ucStaRecIndex);
+VOID nicTxDirectClearBssAbsentQ(IN P_ADAPTER_T prAdapter, UINT_8 ucBssIndex);
+VOID nicTxDirectClearAllStaPsQ(IN P_ADAPTER_T prAdapter);
+void nicTxDirectTimerCheckSkbQ(unsigned long data);
+void nicTxDirectTimerCheckHifQ(unsigned long data);
+WLAN_STATUS nicTxDirectStartXmit(struct sk_buff *prSkb, P_GLUE_INFO_T prGlueInfo);
+/* TX Direct functions : END */
+
 /*******************************************************************************
 *                              F U N C T I O N S
 ********************************************************************************

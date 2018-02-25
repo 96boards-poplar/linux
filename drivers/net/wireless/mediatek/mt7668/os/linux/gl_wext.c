@@ -2064,7 +2064,7 @@ wext_get_essid(IN struct net_device *prNetDev,
 
 	kalMemFree(prSsid, VIR_MEM_TYPE, sizeof(PARAM_SSID_T));
 
-	return 0;
+	return rStatus;
 }				/* wext_get_essid */
 
 #if 0
@@ -3496,7 +3496,7 @@ int wext_support_ioctl(IN struct net_device *prDev, IN struct ifreq *prIfReq, IN
 
 		ret = wext_get_essid(prDev, NULL, &iwr->u.essid, prExtraBuf);
 		if (ret == 0) {
-			if (copy_to_user(iwr->u.essid.pointer, prExtraBuf, iwr->u.essid.length))
+			if (copy_to_user(iwr->u.essid.pointer, prExtraBuf, IW_ESSID_MAX_SIZE))
 				ret = -EFAULT;
 		}
 

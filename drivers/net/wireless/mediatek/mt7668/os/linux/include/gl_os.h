@@ -93,6 +93,14 @@
 #define CFG_TX_STOP_NETIF_PER_QUEUE_THRESHOLD   512	/* packets */
 #define CFG_TX_START_NETIF_PER_QUEUE_THRESHOLD  128	/* packets */
 
+/* WMM Certification Related */
+#define CFG_CERT_WMM_MAX_TX_PENDING			20
+#define CFG_CERT_WMM_MAX_RX_NUM				10
+#define CFG_CERT_WMM_HIGH_STOP_TX_WITH_RX	(CFG_TX_STOP_NETIF_PER_QUEUE_THRESHOLD * 3)
+#define CFG_CERT_WMM_HIGH_STOP_TX_WO_RX		(CFG_TX_STOP_NETIF_PER_QUEUE_THRESHOLD * 2)
+#define CFG_CERT_WMM_LOW_STOP_TX_WITH_RX	(CFG_TX_STOP_NETIF_PER_QUEUE_THRESHOLD >> 4)
+#define CFG_CERT_WMM_LOW_STOP_TX_WO_RX		(CFG_TX_STOP_NETIF_PER_QUEUE_THRESHOLD >> 3)
+
 #define CHIP_NAME    "MT6632"
 
 #define DRV_NAME "["CHIP_NAME"]: "
@@ -177,6 +185,8 @@
 #if WIRELESS_EXT > 12
 #include <net/iw_handler.h>
 #endif
+
+#include <linux/math64.h>
 
 #ifdef CFG_CFG80211_VERSION
 #define CFG80211_VERSION_CODE CFG_CFG80211_VERSION
@@ -310,6 +320,23 @@ typedef struct _GL_WPA_INFO_T {
 	UINT_8 aucReplayCtr[NL80211_REPLAY_CTR_LEN];
 } GL_WPA_INFO_T, *P_GL_WPA_INFO_T;
 
+#if CFG_SUPPORT_REPLAY_DETECTION
+struct SEC_REPLEY_PN_INFO {
+	UINT_8 auPN[16];
+	BOOLEAN fgRekey;
+	BOOLEAN fgFirstPkt;
+};
+struct SEC_DETECT_REPLAY_INFO {
+	UINT_8 ucCurKeyId;
+	UINT_8 ucKeyType;
+	struct SEC_REPLEY_PN_INFO arReplayPNInfo[4];
+	UINT_32 u4KeyLength;
+	UINT_8 aucKeyMaterial[32];
+	BOOLEAN fgPairwiseInstalled;
+	BOOLEAN fgKeyRscFresh;
+};
+#endif
+
 typedef enum _ENUM_NET_DEV_IDX_T {
 	NET_DEV_WLAN_IDX = 0,
 	NET_DEV_P2P_IDX,
@@ -359,6 +386,7 @@ typedef struct _GL_IO_REQ_T {
 	PUINT_32 pu4QryInfoLen;
 	WLAN_STATUS rStatus;
 	UINT_32 u4Flag;
+	UINT_32 u4Timeout;
 } GL_IO_REQ_T, *P_GL_IO_REQ_T;
 
 #if CFG_ENABLE_BT_OVER_WIFI
@@ -970,6 +998,8 @@ WLAN_STATUS wlanGetDebugLevel(IN UINT_32 u4DbgIdx, OUT PUINT_32 pu4DbgMask);
 VOID wlanSetSuspendMode(P_GLUE_INFO_T prGlueInfo, BOOLEAN fgEnable);
 
 VOID wlanGetConfig(P_ADAPTER_T prAdapter);
+
+WLAN_STATUS wlanExtractBufferBin(P_ADAPTER_T prAdapter);
 
 /*******************************************************************************
 *			 E X T E R N A L   F U N C T I O N S / V A R I A B L E

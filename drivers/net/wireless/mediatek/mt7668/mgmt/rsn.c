@@ -2422,9 +2422,9 @@ void rsnSaQueryAction(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwRfb)
 
 VOID rsnGenerateWSCIEForAssocRsp(P_ADAPTER_T prAdapter, P_MSDU_INFO_T prMsduInfo)
 {
-	P_IE_HDR_T PucIE;
-	PUINT_8 puc;
 	P_WIFI_VAR_T prWifiVar = NULL;
+	P_BSS_INFO_T prP2pBssInfo = (P_BSS_INFO_T) NULL;
+	UINT_16 u2IELen = 0;
 
 	ASSERT(prAdapter);
 	ASSERT(prMsduInfo);
@@ -2433,51 +2433,21 @@ VOID rsnGenerateWSCIEForAssocRsp(P_ADAPTER_T prAdapter, P_MSDU_INFO_T prMsduInfo
 	prWifiVar = &(prAdapter->rWifiVar);
 	ASSERT(prWifiVar);
 
-	if (!prWifiVar->ucApWpsMode)	/* Todo::Only at WPS certification ? */
+	DBGLOG(RSN, TRACE, "WPS: Building WPS IE for (Re)Association Response");
+	prP2pBssInfo = GET_BSS_INFO_BY_INDEX(prAdapter, prMsduInfo->ucBssIndex);
+
+	if (prP2pBssInfo->eNetworkType != NETWORK_TYPE_P2P)
 		return;
 
-	DBGLOG(RSN, TRACE, "WPS: Building WPS IE for (Re)Association Response");
+	u2IELen = kalP2PCalWSC_IELen(prAdapter->prGlueInfo, 3, (UINT_8) prP2pBssInfo->u4PrivateData);
 
-	PucIE = (P_IE_HDR_T) (((PUINT_8) prMsduInfo->prPacket) + prMsduInfo->u2FrameLength);
-
-	PucIE->ucId = ELEM_ID_VENDOR;
-
-	puc = PucIE->aucInfo;
-
-	WLAN_SET_FIELD_BE32(puc, WPS_DEV_OUI_WFA);
-	puc += 4;
-
-	WLAN_SET_FIELD_BE16(puc, ATTR_VERSION);
-	puc += 2;
-	WLAN_SET_FIELD_BE16(puc, 1);
-	puc += 2;
-	*puc = 0x10;
-	puc++;
-
-	WLAN_SET_FIELD_BE16(puc, ATTR_RESPONSE_TYPE);
-	puc += 2;
-	WLAN_SET_FIELD_BE16(puc, 1);
-	puc += 2;
-	*puc = 0x3;
-	puc++;
-
-	WLAN_SET_FIELD_BE16(puc, ATTR_VENDOR_EXT);
-	puc += 2;
-	WLAN_SET_FIELD_BE16(puc, 6);
-	puc += 2;
-	WLAN_SET_FIELD_BE24(puc, 14122);
-	puc += 3;
-	*puc = 0x00;		/* Version 2 */
-	puc++;
-	*puc = 0x01;
-	puc++;
-	*puc = 0x20;		/* WPS2.0 */
-	puc++;
-
-	PucIE->ucLength = puc - PucIE->aucInfo;
-
-	prMsduInfo->u2FrameLength += IE_SIZE(PucIE);
-
+	kalP2PGenWSC_IE(prAdapter->prGlueInfo,
+		3,
+		(PUINT_8) ((ULONG) prMsduInfo->prPacket +
+			   (ULONG) prMsduInfo->u2FrameLength),
+			   (UINT_8) prP2pBssInfo->u4PrivateData);
+	prMsduInfo->u2FrameLength += (UINT_16) kalP2PCalWSC_IELen(prAdapter->prGlueInfo, 3,
+		(UINT_8) prP2pBssInfo->u4PrivateData);
 }
 
 #endif
@@ -2862,6 +2832,11 @@ void rsnApSaQueryAction(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwRfb)
 
 	prRxFrame = (P_ACTION_SA_QUERY_FRAME) prSwRfb->pvHeader;
 	prStaRec = cnmGetStaRecByIndex(prAdapter, prSwRfb->ucStaRecIdx);
+
+	if (!prStaRec) {
+		DBGLOG(RSN, WARN, "NULL prStaRec!\n");
+		return;
+	}
 
 	DBGLOG(RSN, TRACE, "AP PMF SAQ action enter from " MACSTR "\n", MAC2STR(prStaRec->aucMacAddr));
 	if (prSwRfb->u2PacketLen < ACTION_SA_QUERY_TR_ID_LEN) {

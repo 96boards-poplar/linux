@@ -1,10 +1,12 @@
 # ---------------------------------------------------
 # Compile Options
 # ---------------------------------------------------
+WLAN_CHIP_LIST:=-UMT6620 -UMT6628 -UMT5931 -UMT6630 -UMT6632
+ccflags-y += $(WLAN_CHIP_LIST)
 
 WLAN_CHIP_ID=$(MTK_COMBO_CHIP)
 ifeq ($(WLAN_CHIP_ID),)
-WLAN_CHIP_ID := MT7668
+WLAN_CHIP_ID := MT6632
 endif
 
 ccflags-y += -DCFG_SUPPORT_DEBUG_FS=0
@@ -35,7 +37,7 @@ else
 ccflags-y += -DBUILD_QA_DBG=0
 endif
 
-CONFIG_MTK_COMBO_WIFI ?= y
+CONFIG_MTK_COMBO_WIFI ?= $(CONFIG_MT7668)
 ifeq ($(CONFIG_MTK_COMBO_WIFI),y)
 ccflags-y += -DCFG_BUILT_IN_DRIVER=1
 ccflags-y += -DCFG_WPS_DISCONNECT=1
@@ -94,7 +96,7 @@ ccflags-y += -DCFG_MET_TAG_SUPPORT=0
 endif
 
 ifeq ($(MODULE_NAME),)
-MODULE_NAME := wlan_$(shell echo $(strip $(WLAN_CHIP_ID)) | tr A-Z a-z)_$(COMBO_WIFI_HIF)
+MODULE_NAME := wlan_$(shell basename $(src))_$(COMBO_WIFI_HIF)
 endif
 
 ccflags-y += -DDBG=0

@@ -191,8 +191,12 @@ WLAN_STATUS nicAllocateAdapterMemory(IN P_ADAPTER_T prAdapter)
 		/* Allocate memory for the CMD_INFO_T and its MGMT memory pool. */
 		prAdapter->u4MgtBufCachedSize = MGT_BUFFER_SIZE;
 
+#ifdef CFG_PREALLOC_MEMORY
+		prAdapter->pucMgtBufCached = preallocGetMem(MEM_ID_NIC_ADAPTER);
+#else
 		LOCAL_NIC_ALLOCATE_MEMORY(prAdapter->pucMgtBufCached,
 					  prAdapter->u4MgtBufCachedSize, PHY_MEM_TYPE, "COMMON MGMT MEMORY POOL");
+#endif
 
 		/* 4 <2> Memory for RX Descriptor */
 		/* Initialize the number of rx buffers we will have in our queue. */
@@ -279,7 +283,9 @@ VOID nicReleaseAdapterMemory(IN P_ADAPTER_T prAdapter)
 	}
 	/* 4 <1> Memory for Management Memory Pool */
 	if (prAdapter->pucMgtBufCached) {
+#ifndef CFG_PREALLOC_MEMORY
 		kalMemFree((PVOID) prAdapter->pucMgtBufCached, PHY_MEM_TYPE, prAdapter->u4MgtBufCachedSize);
+#endif
 		prAdapter->pucMgtBufCached = (PUINT_8) NULL;
 	}
 
@@ -587,6 +593,12 @@ WLAN_STATUS nicInitializeAdapter(IN P_ADAPTER_T prAdapter)
 
 	prAdapter->fgIsIntEnableWithLPOwnSet = FALSE;
 	prAdapter->fgIsReadRevID = FALSE;
+
+#if (CFG_EFUSE_BUFFER_MODE_DELAY_CAL == 1)
+	prAdapter->fgIsBufferBinExtract = FALSE;
+
+	prAdapter->u4EfuseMacAddrOffset = DEFAULT_EFUSE_MACADDR_OFFSET;
+#endif
 
 	do {
 		if (!nicVerifyChipID(prAdapter)) {
@@ -1136,36 +1148,66 @@ UINT_32 nicFreq2ChannelNum(UINT_32 u4FreqInKHz)
 		return 58;
 	case 5300000:
 		return 60;
+	case 5310000:
+		return 62;
 	case 5320000:
 		return 64;
 	case 5500000:
 		return 100;
+	case 5510000:
+		return 102;
 	case 5520000:
 		return 104;
+	case 5530000:
+		return 106;
 	case 5540000:
 		return 108;
+	case 5550000:
+		return 110;
 	case 5560000:
 		return 112;
+	case 5570000:
+		return 114;
 	case 5580000:
 		return 116;
+	case 5590000:
+		return 118;
 	case 5600000:
 		return 120;
+	case 5610000:
+		return 122;
 	case 5620000:
 		return 124;
+	case 5630000:
+		return 126;
 	case 5640000:
 		return 128;
 	case 5660000:
 		return 132;
+	case 5670000:
+		return 134;
 	case 5680000:
 		return 136;
+	case 5690000:
+		return 138;
 	case 5700000:
 		return 140;
+	case 5710000:
+		return 142;
+	case 5720000:
+		return 144;
 	case 5745000:
 		return 149;
+	case 5755000:
+		return 151;
 	case 5765000:
 		return 153;
+	case 5775000:
+		return 155;
 	case 5785000:
 		return 157;
+	case 5795000:
+		return 159;
 	case 5805000:
 		return 161;
 	case 5825000:
@@ -1321,10 +1363,15 @@ WLAN_STATUS nicDeactivateNetwork(IN P_ADAPTER_T prAdapter, IN UINT_8 ucBssIndex)
 
 	/* free all correlated station records */
 	cnmStaFreeAllStaByNetwork(prAdapter, ucBssIndex, STA_REC_EXCLUDE_NONE);
-	qmFreeAllByBssIdx(prAdapter, ucBssIndex);
+	if (HAL_IS_TX_DIRECT(prAdapter))
+		nicTxDirectClearBssAbsentQ(prAdapter, ucBssIndex);
+	else
+		qmFreeAllByBssIdx(prAdapter, ucBssIndex);
 	nicFreePendingTxMsduInfoByBssIdx(prAdapter, ucBssIndex);
 	kalClearSecurityFramesByBssIdx(prAdapter->prGlueInfo, ucBssIndex);
-
+#if (CFG_HW_WMM_BY_BSS == 1)
+	cnmFreeWmmIndex(prAdapter, prBssInfo);
+#endif
 	return u4Status;
 }
 
@@ -1488,7 +1535,10 @@ WLAN_STATUS nicUpdateBss(IN P_ADAPTER_T prAdapter, IN UINT_8 ucBssIndex)
 #endif
 		/* free all correlated station records */
 		cnmStaFreeAllStaByNetwork(prAdapter, ucBssIndex, STA_REC_EXCLUDE_NONE);
-		qmFreeAllByBssIdx(prAdapter, ucBssIndex);
+		if (HAL_IS_TX_DIRECT(prAdapter))
+			nicTxDirectClearBssAbsentQ(prAdapter, ucBssIndex);
+		else
+			qmFreeAllByBssIdx(prAdapter, ucBssIndex);
 		kalClearSecurityFramesByBssIdx(prAdapter->prGlueInfo, ucBssIndex);
 #if CFG_ENABLE_GTK_FRAME_FILTER
 		if (prBssInfo->prIpV4NetAddrList)
@@ -1886,7 +1936,7 @@ nicUpdateBeaconIETemplate(IN P_ADAPTER_T prAdapter,
 	} else if (eIeUpdMethod == IE_UPD_METHOD_DELETE_ALL) {
 		u2CmdBufLen = OFFSET_OF(CMD_BEACON_TEMPLATE_UPDATE, u2IELen);
 	} else {
-		ASSERT(0);
+		DBGLOG(INIT, ERROR, "Unknown IeUpdMethod.\n");
 		return WLAN_STATUS_FAILURE;
 	}
 

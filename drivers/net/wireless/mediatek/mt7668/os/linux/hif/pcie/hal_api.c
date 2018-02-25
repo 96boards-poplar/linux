@@ -552,19 +552,9 @@ BOOLEAN halTxIsDataBufEnough(IN P_ADAPTER_T prAdapter, IN P_MSDU_INFO_T prMsduIn
 	prHifInfo = &prAdapter->prGlueInfo->rHifInfo;
 	prTxRing = &prHifInfo->TxRing[TX_RING_DATA0_IDX_0];
 
-	if ((halGetMsduTokenFreeCnt(prAdapter) > 0) && ((TX_RING_SIZE - prTxRing->u4UsedCnt) > 1)) {
+	if ((halGetMsduTokenFreeCnt(prAdapter) > 0) && ((TX_RING_SIZE - prTxRing->u4UsedCnt) > 1))
+		return TRUE;
 
-		P_MSDU_TOKEN_INFO_T prTokenInfo = &prAdapter->prGlueInfo->rHifInfo.rTokenInfo;
-
-		if (prAdapter->rWifiVar.ucTpTestMode == ENUM_TP_TEST_MODE_THROUGHPUT) {
-			if (prTokenInfo->i4UsedCnt > TX_TOKEN_FLOW_CONTROL) {
-				DBGLOG(HAL, TRACE, "SKIP TX! Token[%u] Over Threshold\n", prTokenInfo->i4UsedCnt);
-				return FALSE;
-			} else
-				return TRUE;
-		} else
-			return TRUE;
-	}
 	DBGLOG(HAL, TRACE, "Low Tx Data Resource Tok[%u] Ring[%u]\n", halGetMsduTokenFreeCnt(prAdapter),
 		(TX_RING_SIZE - prTxRing->u4UsedCnt));
 	return FALSE;
@@ -1201,7 +1191,7 @@ VOID halWpdmaFreeRing(P_GLUE_INFO_T prGlueInfo)
 	}
 }
 
-static VOID halWpdmaSetup(P_GLUE_INFO_T prGlueInfo, BOOLEAN enable)
+VOID halWpdmaSetup(P_GLUE_INFO_T prGlueInfo, BOOLEAN enable)
 {
 	struct mt66xx_chip_info *chip_info = prGlueInfo->prAdapter->chip_info;
 

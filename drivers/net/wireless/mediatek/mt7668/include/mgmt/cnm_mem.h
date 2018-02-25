@@ -543,6 +543,10 @@ struct _STA_RECORD_T {
 	UINT_32 u4RxVector3;
 	UINT_32 u4RxVector4;
 #endif
+#if CFG_SUPPORT_LAST_SEC_MCS_INFO
+	UINT_32 au4RxVect0Que[MCS_INFO_SAMPLE_CNT];
+	UINT_32 au4RxVect1Que[MCS_INFO_SAMPLE_CNT];
+#endif
 	UINT_8 ucSmDialogToken;	/* Spectrum Mngt Dialog Token */
 	UINT_8 ucSmMsmtRequestMode; /* Measurement Request Mode */
 	UINT_8 ucSmMsmtToken; /* Measurement Request Token */

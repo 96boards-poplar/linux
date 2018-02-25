@@ -205,6 +205,10 @@ p2pFuncBeaconUpdate(IN P_ADAPTER_T prAdapter, IN P_BSS_INFO_T prP2pBssInfo, IN P
 		    prBcnUpdateInfo, IN PUINT_8 pucNewBcnHdr, IN UINT_32 u4NewHdrLen, IN PUINT_8 pucNewBcnBody, IN
 		    UINT_32 u4NewBodyLen);
 
+WLAN_STATUS
+p2pFuncAssocRespUpdate(IN P_ADAPTER_T prAdapter, IN P_BSS_INFO_T prP2pBssInfo, IN PUINT_8 AssocRespIE, IN
+		    UINT_32 u4AssocRespLen);
+
 BOOLEAN
 p2pFuncValidateAuth(IN P_ADAPTER_T prAdapter, IN P_BSS_INFO_T prBssInfo, IN P_SW_RFB_T prSwRfb, IN PP_STA_RECORD_T
 		    pprStaRec, OUT PUINT_16 pu2StatusCode);
@@ -216,6 +220,8 @@ VOID p2pFuncResetStaRecStatus(IN P_ADAPTER_T prAdapter, IN P_STA_RECORD_T prStaR
 VOID
 p2pFuncInitConnectionSettings(IN P_ADAPTER_T prAdapter, IN P_P2P_CONNECTION_SETTINGS_T prP2PConnSettings, IN BOOLEAN
 			      fgIsApMode);
+
+BOOLEAN p2pFuncParseCheckForTKIPInfoElem(IN PUINT_8 pucBuf);
 
 BOOLEAN p2pFuncParseCheckForP2PInfoElem(IN P_ADAPTER_T prAdapter, IN PUINT_8 pucBuf, OUT PUINT_8 pucOuiType);
 

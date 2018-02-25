@@ -118,7 +118,11 @@ scanP2pProcessBeaconAndProbeResp(IN P_ADAPTER_T prAdapter,
 {
 	BOOLEAN fgIsSkipThisBeacon = FALSE;
 
-	if (prBssDesc->fgIsP2PPresent) {
+	/* Indicate network to kernel for P2P interface when:
+	  *     1. This is P2P network
+	  *     2. Driver is configured to report all networks
+	  */
+	if (prBssDesc->fgIsP2PPresent || prAdapter->p2p_scan_report_all_bss) {
 		if ((prBssDesc->fgIsConnected) &&	/* P2P GC connected. */
 		    ((prWlanBeaconFrame->u2FrameCtrl & MASK_FRAME_TYPE) == MAC_FRAME_BEACON)	/* TX Beacon */
 		    ) {

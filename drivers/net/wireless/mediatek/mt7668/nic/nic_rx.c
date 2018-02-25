@@ -148,6 +148,9 @@ static RX_EVENT_HANDLER_T arEventTable[] = {
 	{EVENT_ID_STATISTICS,				nicEventStatistics},
 	{EVENT_ID_WLAN_INFO,				nicEventWlanInfo},
 	{EVENT_ID_MIB_INFO,					nicEventMibInfo},
+#if CFG_SUPPORT_LAST_SEC_MCS_INFO
+	{EVENT_ID_TX_MCS_INFO,				nicEventTxMcsInfo},
+#endif
 	{EVENT_ID_CH_PRIVILEGE,				cnmChMngrHandleChEvent},
 	{EVENT_ID_BSS_ABSENCE_PRESENCE,		qmHandleEventBssAbsencePresence},
 	{EVENT_ID_STA_CHANGE_PS_MODE,		qmHandleEventStaChangePsMode},
@@ -180,6 +183,14 @@ static RX_EVENT_HANDLER_T arEventTable[] = {
 	{EVENT_ID_CSA_DONE,			cnmCsaDoneEvent},
 #else
 	{EVENT_ID_UPDATE_COEX_PHYRATE,		nicEventUpdateCoexPhyrate},
+#endif
+#if (CFG_WOW_SUPPORT == 1)
+	{EVENT_ID_WOW_WAKEUP_REASON,		nicEventWakeUpReason},
+#endif
+	{EVENT_ID_CSI_DATA,                 nicEventCSIData},
+
+#if CFG_SUPPORT_REPLAY_DETECTION
+	{EVENT_ID_GET_GTK_REKEY_DATA,       nicEventGetGtkDataSync},
 #endif
 };
 
@@ -834,9 +845,7 @@ VOID nicRxProcessPktWithoutReorder(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwR
 	BOOL fgIsRetained = FALSE;
 	UINT_32 u4CurrentRxBufferCount;
 	/* P_STA_RECORD_T prStaRec = (P_STA_RECORD_T)NULL; */
-#if CFG_SUPPORT_MULTITHREAD
-	KAL_SPIN_LOCK_DECLARATION();
-#endif
+
 	DEBUGFUNC("nicRxProcessPktWithoutReorder");
 	/* DBGLOG(RX, TRACE, ("\n")); */
 
@@ -890,12 +899,22 @@ VOID nicRxProcessPktWithoutReorder(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwR
 	}
 
 #if CFG_SUPPORT_MULTITHREAD
-	KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_TO_OS_QUE);
-	QUEUE_INSERT_TAIL(&(prAdapter->rRxQueue), (P_QUE_ENTRY_T) GLUE_GET_PKT_QUEUE_ENTRY(prSwRfb->pvPacket));
-	KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_TO_OS_QUE);
+	if (HAL_IS_RX_DIRECT(prAdapter)) {
+		kalRxIndicateOnePkt(prAdapter->prGlueInfo,
+				    (PVOID) GLUE_GET_PKT_DESCRIPTOR(GLUE_GET_PKT_QUEUE_ENTRY(prSwRfb->pvPacket)));
+		RX_ADD_CNT(prRxCtrl, RX_DATA_INDICATION_COUNT, 1);
+		if (fgIsRetained)
+			RX_ADD_CNT(prRxCtrl, RX_DATA_RETAINED_COUNT, 1);
+	} else {
+		KAL_SPIN_LOCK_DECLARATION();
 
-	prRxCtrl->ucNumIndPacket++;
-	kalSetTxEvent2Rx(prAdapter->prGlueInfo);
+		KAL_ACQUIRE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_TO_OS_QUE);
+		QUEUE_INSERT_TAIL(&(prAdapter->rRxQueue), (P_QUE_ENTRY_T) GLUE_GET_PKT_QUEUE_ENTRY(prSwRfb->pvPacket));
+		KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_TO_OS_QUE);
+
+		prRxCtrl->ucNumIndPacket++;
+		kalSetTxEvent2Rx(prAdapter->prGlueInfo);
+	}
 #else
 	prRxCtrl->apvIndPacket[prRxCtrl->ucNumIndPacket] = prSwRfb->pvPacket;
 	prRxCtrl->ucNumIndPacket++;
@@ -1295,7 +1314,7 @@ VOID nicRxProcessMonitorPacket(IN P_ADAPTER_T prAdapter, IN OUT P_SW_RFB_T prSwR
 	}
 
 	/* Bit Number 5 ANT SIGNAL */
-	rMonitorRadiotap.ucAntennaSignal = (((prRxStatusGroup3)->u4RxVector[3] & RX_VT_IB_RSSI_MASK));
+	rMonitorRadiotap.ucAntennaSignal = RCPI_TO_dBm(HAL_RX_STATUS_GET_RCPI0(prSwRfb->prRxStatusGroup3));
 
 	/* Bit Number 6 ANT NOISE */
 	rMonitorRadiotap.ucAntennaNoise = ((((prRxStatusGroup3)->u4RxVector[5] & RX_VT_NF0_MASK) >> 1) + 128);
@@ -1340,6 +1359,7 @@ VOID nicRxProcessMonitorPacket(IN P_ADAPTER_T prAdapter, IN OUT P_SW_RFB_T prSwR
 	prRxCtrl->ucNumIndPacket++;
 #endif
 
+	prSwRfb->pvPacket = NULL;
 	/* Return RFB */
 	if (nicRxSetupRFB(prAdapter, prSwRfb)) {
 		DBGLOG(RX, WARN, "Cannot allocate packet buffer for SwRfb!\n");
@@ -2741,12 +2761,23 @@ VOID nicRxProcessRFBs(IN P_ADAPTER_T prAdapter)
 				switch (prSwRfb->ucPacketType) {
 				case RX_PKT_TYPE_RX_DATA:
 #if CFG_SUPPORT_SNIFFER
-					if (prAdapter->prGlueInfo->fgIsEnableMon) {
+					if (prAdapter->prGlueInfo->fgIsEnableMon && HAL_IS_RX_DIRECT(prAdapter)) {
+						spin_lock_bh(&prAdapter->prGlueInfo->rSpinLock[SPIN_LOCK_RX_DIRECT]);
+						nicRxProcessMonitorPacket(prAdapter, prSwRfb);
+						spin_unlock_bh(&prAdapter->prGlueInfo->rSpinLock[SPIN_LOCK_RX_DIRECT]);
+						break;
+					} else if (prAdapter->prGlueInfo->fgIsEnableMon) {
 						nicRxProcessMonitorPacket(prAdapter, prSwRfb);
 						break;
 					}
 #endif
-					nicRxProcessDataPacket(prAdapter, prSwRfb);
+					if (HAL_IS_RX_DIRECT(prAdapter)) {
+						spin_lock_bh(&prAdapter->prGlueInfo->rSpinLock[SPIN_LOCK_RX_DIRECT]);
+						nicRxProcessDataPacket(prAdapter, prSwRfb);
+						spin_unlock_bh(&prAdapter->prGlueInfo->rSpinLock[SPIN_LOCK_RX_DIRECT]);
+					} else {
+						nicRxProcessDataPacket(prAdapter, prSwRfb);
+					}
 					break;
 
 				case RX_PKT_TYPE_SW_DEFINED:
@@ -2888,11 +2919,9 @@ VOID nicRxReturnRFB(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwRfb)
 	}
 	KAL_RELEASE_SPIN_LOCK(prAdapter, SPIN_LOCK_RX_FREE_QUE);
 
-#if CFG_USB_RX_HANDLE_IN_HIF_THREAD
 	/* Trigger Rx if there are free SwRfb */
 	if (halIsPendingRx(prAdapter) && (prRxCtrl->rFreeSwRfbList.u4NumElem > 0))
 		kalSetIntEvent(prAdapter->prGlueInfo);
-#endif
 }				/* end of nicRxReturnRFB() */
 
 /*----------------------------------------------------------------------------*/

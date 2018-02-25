@@ -204,6 +204,10 @@ typedef enum _ENUM_SPIN_LOCK_CATEGORY_E {
 	SPIN_LOCK_TXS_COUNT,
 	/* end    */
 	SPIN_LOCK_TX,
+	/* TX/RX Direct : BEGIN */
+	SPIN_LOCK_TX_DIRECT,
+	SPIN_LOCK_RX_DIRECT,
+	/* TX/RX Direct : END */
 	SPIN_LOCK_IO_REQ,
 	SPIN_LOCK_INT,
 
@@ -472,6 +476,19 @@ typedef struct _MONITOR_RADIOTAP_T {
 #endif
 
 /**
+ * kalCfg80211ToMtkBand - Band translation helper
+ *
+ * @band: cfg80211_band
+ *
+ * Translates cfg80211 band into internal band definition
+ */
+#if CFG_SCAN_CHANNEL_SPECIFIED
+#define kalCfg80211ToMtkBand(cfg80211_band) \
+	(cfg80211_band == KAL_BAND_2GHZ ? BAND_2G4 : \
+	 cfg80211_band == KAL_BAND_5GHZ ? BAND_5G : BAND_NULL)
+#endif
+
+/**
  * kalCfg80211ScanDone - abstraction of cfg80211_scan_done
  *
  * @request: the corresponding scan request (sanity checked by callers!)
@@ -557,7 +574,10 @@ static inline void kalCfg80211ScanDone(struct cfg80211_scan_request *request,
 #define kalMemAlloc(u4Size, eMemType) ({    \
 	void *pvAddr; \
 	if (eMemType == PHY_MEM_TYPE) { \
-		pvAddr = kmalloc(u4Size, GFP_KERNEL);   \
+		if (in_interrupt()) \
+			pvAddr = kmalloc(u4Size, GFP_ATOMIC);   \
+		else \
+			pvAddr = kmalloc(u4Size, GFP_KERNEL);   \
 	} \
 	else { \
 		pvAddr = vmalloc(u4Size);   \
@@ -573,7 +593,10 @@ static inline void kalCfg80211ScanDone(struct cfg80211_scan_request *request,
 #define kalMemAlloc(u4Size, eMemType) ({    \
 	void *pvAddr; \
 	if (eMemType == PHY_MEM_TYPE) { \
-		pvAddr = kmalloc(u4Size, GFP_KERNEL);   \
+		if (in_interrupt()) \
+			pvAddr = kmalloc(u4Size, GFP_ATOMIC);   \
+		else \
+			pvAddr = kmalloc(u4Size, GFP_KERNEL);   \
 	} \
 	else { \
 		pvAddr = vmalloc(u4Size);   \
@@ -670,6 +693,7 @@ static inline void kalCfg80211ScanDone(struct cfg80211_scan_request *request,
 #define kalkStrtou32(cp, base, resp)                kstrtou32(cp, base, resp)
 #define kalkStrtos32(cp, base, resp)                kstrtos32(cp, base, resp)
 #define kalSnprintf(buf, size, fmt, ...)            snprintf(buf, size, fmt, ##__VA_ARGS__)
+#define kalScnprintf(buf, size, fmt, ...)           scnprintf(buf, size, fmt, ##__VA_ARGS__)
 #define kalSprintf(buf, fmt, ...)                   sprintf(buf, fmt, __VA_ARGS__)
 /* remove for AOSP */
 /* #define kalSScanf(buf, fmt, ...)                    sscanf(buf, fmt, __VA_ARGS__) */
@@ -783,6 +807,8 @@ do { \
 	{ \
 		(_Interval) += KAL_GET_TIME_INTERVAL(); \
 	}
+
+#define KAL_GET_HOST_CLOCK()		local_clock()
 
 /*******************************************************************************
 *                  F U N C T I O N   D E C L A R A T I O N S
@@ -901,6 +927,13 @@ kalIoctl(IN P_GLUE_INFO_T prGlueInfo,
 	 IN PFN_OID_HANDLER_FUNC pfnOidHandler,
 	 IN PVOID pvInfoBuf,
 	 IN UINT_32 u4InfoBufLen, IN BOOL fgRead, IN BOOL fgWaitResp, IN BOOL fgCmd, OUT PUINT_32 pu4QryInfoLen);
+
+WLAN_STATUS
+kalIoctlTimeout(IN P_GLUE_INFO_T prGlueInfo,
+	 IN PFN_OID_HANDLER_FUNC pfnOidHandler,
+	 IN PVOID pvInfoBuf,
+	 IN UINT_32 u4InfoBufLen, IN BOOL fgRead, IN BOOL fgWaitResp, IN BOOL fgCmd, IN INT_32 i4OidTimeout,
+	 OUT PUINT_32 pu4QryInfoLen);
 
 VOID kalHandleAssocInfo(IN P_GLUE_INFO_T prGlueInfo, IN P_EVENT_ASSOC_INFO prAssocInfo);
 
@@ -1047,7 +1080,7 @@ kalUpdateRSSI(IN P_GLUE_INFO_T prGlueInfo,
 /*----------------------------------------------------------------------------*/
 /* I/O Buffer Pre-allocation                                                  */
 /*----------------------------------------------------------------------------*/
-BOOLEAN kalInitIOBuffer(VOID);
+BOOLEAN kalInitIOBuffer(BOOLEAN is_pre_alloc);
 
 VOID kalUninitIOBuffer(VOID);
 
@@ -1224,5 +1257,13 @@ static inline void kal_skb_reset_mac_len(struct sk_buff *skb)
 	skb->mac_len = skb->network_header - skb->mac_header;
 }
 #endif
+
+static inline UINT_64 kalDivU64(UINT_64 dividend, UINT_32 divisor)
+{
+	return div_u64(dividend, divisor);
+}
+
+VOID kalInitDevWakeup(P_ADAPTER_T prAdapter, struct device *prDev);
+
 
 #endif /* _GL_KAL_H */

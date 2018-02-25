@@ -124,11 +124,17 @@ typedef enum _ENUM_USB_END_POINT_T {
 
 #define HIF_TX_INIT_CMD_PORT             USB_CMD_EP_OUT
 
+#ifdef CFG_USB_REQ_TX_DATA_FFA_CNT
+#define USB_REQ_TX_DATA_FFA_CNT         (CFG_USB_REQ_TX_DATA_FFA_CNT)	/* platform specific USB_REQ_TX_DATA_FFA_CNT */
+#else
+#define USB_REQ_TX_DATA_FFA_CNT         (10)
+#endif
+
 #ifdef CFG_USB_REQ_TX_DATA_CNT
 #define USB_REQ_TX_DATA_CNT             (CFG_USB_REQ_TX_DATA_CNT)	/* platform specific USB_REQ_TX_DATA_CNT */
 #else
 #if CFG_USB_TX_AGG
-#define USB_REQ_TX_DATA_CNT             (32*4)	/* must be >= 2 */
+#define USB_REQ_TX_DATA_CNT             (2)	/* must be >= 2 */
 #else
 #define USB_REQ_TX_DATA_CNT             (CFG_TX_MAX_PKT_NUM)
 #endif
@@ -139,7 +145,7 @@ typedef enum _ENUM_USB_END_POINT_T {
 #ifdef CFG_USB_REQ_RX_DATA_CNT
 #define USB_REQ_RX_DATA_CNT             (CFG_USB_REQ_RX_DATA_CNT)	/* platform specific USB_REQ_RX_DATA_CNT */
 #else
-#define USB_REQ_RX_DATA_CNT             (32)
+#define USB_REQ_RX_DATA_CNT             (2)
 #endif
 
 #define USB_RX_AGGREGTAION_LIMIT        (32)	/* Unit: K-bytes */
@@ -155,9 +161,9 @@ typedef enum _ENUM_USB_END_POINT_T {
 #endif
 #define USB_RX_EVENT_BUF_SIZE           (CFG_RX_MAX_PKT_SIZE + 3 + LEN_USB_RX_PADDING_CSO + 4)
 #define USB_RX_DATA_BUF_SIZE            (CFG_RX_MAX_PKT_SIZE + \
-					min(USB_RX_AGGREGTAION_LIMIT * 1024, \
-					    (USB_RX_AGGREGTAION_PKT_LIMIT * \
-					     (CFG_RX_MAX_PKT_SIZE + 3 + LEN_USB_RX_PADDING_CSO) + 4)))
+					 min(USB_RX_AGGREGTAION_LIMIT * 1024, \
+					     (USB_RX_AGGREGTAION_PKT_LIMIT * \
+					      (CFG_RX_MAX_PKT_SIZE + 3 + LEN_USB_RX_PADDING_CSO) + 4)))
 
 #define LEN_USB_UDMA_TX_TERMINATOR      (4)	/*HW design spec */
 #define LEN_USB_RX_PADDING_CSO          (4)	/*HW design spec */
@@ -211,6 +217,13 @@ enum usb_state {
 	USB_STATE_WIFI_OFF /* Hif power off wifi */
 };
 
+enum usb_submit_type {
+	SUBMIT_TYPE_TX_CMD,
+	SUBMIT_TYPE_TX_DATA,
+	SUBMIT_TYPE_RX_EVENT,
+	SUBMIT_TYPE_RX_DATA
+};
+
 typedef enum _EVENT_EP_TYPE {
 	EVENT_EP_TYPE_UNKONW,
 	EVENT_EP_TYPE_BULK,
@@ -236,8 +249,10 @@ typedef struct _GL_HIF_INFO_T {
 	spinlock_t rTxCmdQLock;
 	spinlock_t rRxEventQLock;
 	spinlock_t rRxDataQLock;
+	spinlock_t rStateLock;
 
 	PVOID prTxCmdReqHead;
+	PVOID arTxDataFfaReqHead;
 	PVOID arTxDataReqHead[USB_TC_NUM];
 	PVOID prRxEventReqHead;
 	PVOID prRxDataReqHead;
@@ -245,29 +260,31 @@ typedef struct _GL_HIF_INFO_T {
 	spinlock_t rTxCmdFreeQLock;
 	struct list_head rTxCmdSendingQ;
 	spinlock_t rTxCmdSendingQLock;
+	struct list_head rTxDataFfaQ;
 #if CFG_USB_TX_AGG
-	UINT_32 u4AggRsvSize;
+	UINT_32 u4AggRsvSize[USB_TC_NUM];
 	struct list_head rTxDataFreeQ[USB_TC_NUM];
 	struct usb_anchor rTxDataAnchor[USB_TC_NUM];
 #else
 	struct list_head rTxDataFreeQ;
 	struct usb_anchor rTxDataAnchor;
 #endif
-	spinlock_t rTxDataFreeQLock;
+	/*spinlock_t rTxDataFreeQLock;*/
 	struct list_head rRxEventFreeQ;
-	spinlock_t rRxEventFreeQLock;
+	/*spinlock_t rRxEventFreeQLock;*/
 	struct usb_anchor rRxEventAnchor;
 	struct list_head rRxDataFreeQ;
-	spinlock_t rRxDataFreeQLock;
+	/*spinlock_t rRxDataFreeQLock;*/
 	struct usb_anchor rRxDataAnchor;
 	struct list_head rRxEventCompleteQ;
-	spinlock_t rRxEventCompleteQLock;
+	/*spinlock_t rRxEventCompleteQLock;*/
 	struct list_head rRxDataCompleteQ;
-	spinlock_t rRxDataCompleteQLock;
+	/*spinlock_t rRxDataCompleteQLock;*/
 	struct list_head rTxCmdCompleteQ;
 	struct list_head rTxDataCompleteQ;
 
 	BUF_CTRL_T rTxCmdBufCtrl[USB_REQ_TX_CMD_CNT];
+	BUF_CTRL_T rTxDataFfaBufCtrl[USB_REQ_TX_DATA_FFA_CNT];
 #if CFG_USB_TX_AGG
 	BUF_CTRL_T rTxDataBufCtrl[USB_TC_NUM][USB_REQ_TX_DATA_CNT];
 #else
@@ -294,6 +311,11 @@ typedef struct _USB_REQ_T {
 	PVOID prPriv;
 	QUE_T rSendingDataMsduInfoList;
 } USB_REQ_T, *P_USB_REQ_T;
+
+/* USB_REQ_T prPriv field for TxData */
+#define FFA_MASK                        BIT(7)           /* Indicate if this UsbReq is from FFA queue. */
+#define TC_MASK                         BITS(0, 6)       /* Indicate which TC this UsbReq belongs to */
+
 
 /*******************************************************************************
 *                            P U B L I C   D A T A
@@ -346,6 +368,11 @@ int mtk_usb_vendor_request(IN P_GLUE_INFO_T prGlueInfo, IN UCHAR uEndpointAddres
 VOID glUsbEnqueueReq(P_GL_HIF_INFO_T prHifInfo, struct list_head *prHead, P_USB_REQ_T prUsbReq,
 		     spinlock_t *prLock, BOOLEAN fgHead);
 P_USB_REQ_T glUsbDequeueReq(P_GL_HIF_INFO_T prHifInfo, struct list_head *prHead, spinlock_t *prLock);
+BOOLEAN glUsbBorrowFfaReq(P_GL_HIF_INFO_T prHifInfo, UINT_8 ucTc);
+
+VOID glUsbSetState(P_GL_HIF_INFO_T prHifInfo, enum usb_state state);
+
+INT_32 glUsbSubmitUrb(P_GL_HIF_INFO_T prHifInfo, struct urb *urb, enum usb_submit_type type);
 
 WLAN_STATUS halTxUSBSendCmd(IN P_GLUE_INFO_T prGlueInfo, IN UINT_8 ucTc, IN P_CMD_INFO_T prCmdInfo);
 VOID halTxUSBSendCmdComplete(struct urb *urb);

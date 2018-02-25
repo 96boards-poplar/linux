@@ -96,7 +96,6 @@
 *                           P R I V A T E   D A T A
 ********************************************************************************
 */
-#if !DBG_DISABLE_ALL_LOG
 static PUINT_8 apucDebugAisState[AIS_STATE_NUM] = {
 	(PUINT_8) DISP_STRING("IDLE"),
 	(PUINT_8) DISP_STRING("SEARCH"),
@@ -114,7 +113,6 @@ static PUINT_8 apucDebugAisState[AIS_STATE_NUM] = {
 	(PUINT_8) DISP_STRING("REQ_REMAIN_ON_CHANNEL"),
 	(PUINT_8) DISP_STRING("REMAIN_ON_CHANNEL")
 };
-#endif
 
 /*******************************************************************************
 *                                 M A C R O S
@@ -319,8 +317,10 @@ VOID aisFsmInit(IN P_ADAPTER_T prAdapter)
 	prAisBssInfo->prStaRecOfAP = (P_STA_RECORD_T) NULL;
 	prAisBssInfo->ucNss = wlanGetSupportNss(prAdapter, prAisBssInfo->ucBssIndex);
 	prAisBssInfo->eDBDCBand = ENUM_BAND_0;
-	prAisBssInfo->ucWmmQueSet = DBDC_2G_WMM_INDEX;
-
+#if (CFG_HW_WMM_BY_BSS == 0)
+	prAisBssInfo->ucWmmQueSet =
+			(prAdapter->rWifiVar.ucDbdcMode == DBDC_MODE_DISABLED) ? DBDC_5G_WMM_INDEX : DBDC_2G_WMM_INDEX;
+#endif
 	/* 4 <4> Allocate MSDU_INFO_T for Beacon */
 	prAisBssInfo->prBeacon = cnmMgtPktAlloc(prAdapter,
 						OFFSET_OF(WLAN_BEACON_FRAME_T, aucInfoElem[0]) + MAX_IE_LENGTH);
@@ -446,6 +446,10 @@ VOID aisFsmStateInit_JOIN(IN P_ADAPTER_T prAdapter, P_BSS_DESC_T prBssDesc)
 	/* 4 <2> Setup corresponding STA_RECORD_T */
 	prStaRec = bssCreateStaRecFromBssDesc(prAdapter,
 					      STA_TYPE_LEGACY_AP, prAdapter->prAisBssInfo->ucBssIndex, prBssDesc);
+	if (!prStaRec) {
+		DBGLOG(AIS, ERROR, "prStaRec is NULL!\n");
+		return;
+	}
 
 	prAisFsmInfo->prTargetStaRec = prStaRec;
 
@@ -680,7 +684,10 @@ VOID aisFsmStateInit_IBSS_MERGE(IN P_ADAPTER_T prAdapter, P_BSS_DESC_T prBssDesc
 	/* 4 <2> Setup corresponding STA_RECORD_T */
 	prStaRec = bssCreateStaRecFromBssDesc(prAdapter,
 					      STA_TYPE_ADHOC_PEER, prAdapter->prAisBssInfo->ucBssIndex, prBssDesc);
-
+	if (!prStaRec) {
+		DBGLOG(AIS, ERROR, "prStaRec is NULL!\n");
+		return;
+	}
 	prStaRec->fgIsMerging = TRUE;
 
 	prAisFsmInfo->prTargetStaRec = prStaRec;
@@ -1003,6 +1010,11 @@ VOID aisFsmSteps(IN P_ADAPTER_T prAdapter, ENUM_AIS_STATE_T eNextState)
 					prAisBssInfo->u4RsnSelectedPairwiseCipher =
 					    prBssDesc->u4RsnSelectedPairwiseCipher;
 					prAisBssInfo->u4RsnSelectedAKMSuite = prBssDesc->u4RsnSelectedAKMSuite;
+#if (CFG_HW_WMM_BY_BSS == 1)
+					if (prAisBssInfo->fgIsWmmInited == FALSE)
+						prAisBssInfo->ucWmmQueSet =
+							cnmWmmIndexDecision(prAdapter, prAisBssInfo);
+#endif
 #if CFG_SUPPORT_DBDC
 					cnmDbdcEnableDecision(prAdapter, prAisBssInfo->ucBssIndex, prBssDesc->eBand);
 					cnmGetDbdcCapability(prAdapter, prAisBssInfo->ucBssIndex,
@@ -1011,7 +1023,9 @@ VOID aisFsmSteps(IN P_ADAPTER_T prAdapter, ENUM_AIS_STATE_T eNextState)
 
 					prAisBssInfo->eDBDCBand = ENUM_BAND_AUTO;
 					prAisBssInfo->ucNss = rDbdcCap.ucNss;
+#if (CFG_HW_WMM_BY_BSS == 0)
 					prAisBssInfo->ucWmmQueSet = rDbdcCap.ucWmmSetIndex;
+#endif
 #endif /*CFG_SUPPORT_DBDC*/
 					/* 4 <B> Do STATE transition and update current Operation Mode. */
 					if (prBssDesc->eBSSType == BSS_TYPE_INFRASTRUCTURE) {
@@ -1234,6 +1248,13 @@ VOID aisFsmSteps(IN P_ADAPTER_T prAdapter, ENUM_AIS_STATE_T eNextState)
 				prScanReqMsg->ucChannelListNum = 1;
 				prScanReqMsg->arChnlInfoList[0].eBand = eBand;
 				prScanReqMsg->arChnlInfoList[0].ucChannelNum = ucChannel;
+#if CFG_SCAN_CHANNEL_SPECIFIED
+			} else if (is_valid_scan_chnl_cnt(prAisFsmInfo->ucScanChannelListNum)) {
+				prScanReqMsg->eScanChannel = SCAN_CHANNEL_SPECIFIED;
+				prScanReqMsg->ucChannelListNum = prAisFsmInfo->ucScanChannelListNum;
+				kalMemCopy(prScanReqMsg->arChnlInfoList, prAisFsmInfo->arScanChnlInfoList,
+					sizeof(RF_CHANNEL_INFO_T) * prScanReqMsg->ucChannelListNum);
+#endif
 			} else if (prAdapter->aePreferBand[prAdapter->prAisBssInfo->ucBssIndex] == BAND_NULL) {
 				if (prAdapter->fgEnable5GBand == TRUE)
 					prScanReqMsg->eScanChannel = SCAN_CHANNEL_FULL;
@@ -2894,6 +2915,7 @@ VOID aisFsmDisconnect(IN P_ADAPTER_T prAdapter, IN BOOLEAN fgDelayIndication)
 	/* 4 <6> Indicate Disconnected Event to Host */
 	aisIndicationOfMediaStateToHost(prAdapter, PARAM_MEDIA_STATE_DISCONNECTED, fgDelayIndication);
 
+
 	/* 4 <7> Trigger AIS FSM */
 	aisFsmSteps(prAdapter, AIS_STATE_IDLE);
 }				/* end of aisFsmDisconnect() */
@@ -3118,6 +3140,27 @@ VOID aisFsmRunEventDeauthTimeout(IN P_ADAPTER_T prAdapter, ULONG ulParamPtr)
 	aisDeauthXmitComplete(prAdapter, NULL, TX_RESULT_LIFE_TIMEOUT);
 }
 
+#if CFG_SUPPORT_LAST_SEC_MCS_INFO
+VOID aisRxMcsCollectionTimeout(IN P_ADAPTER_T prAdapter, ULONG ulParamPtr)
+{
+	static UINT_8 ucSmapleCnt;
+	UINT_8 ucStaIdx = 0;
+
+	if (prAdapter->prAisBssInfo->prStaRecOfAP == NULL)
+		return;
+
+	ucStaIdx = prAdapter->prAisBssInfo->prStaRecOfAP->ucIndex;
+
+	if (prAdapter->arStaRec[ucStaIdx].fgIsValid && prAdapter->arStaRec[ucStaIdx].fgIsInUse) {
+		prAdapter->arStaRec[ucStaIdx].au4RxVect0Que[ucSmapleCnt] = prAdapter->arStaRec[ucStaIdx].u4RxVector0;
+		prAdapter->arStaRec[ucStaIdx].au4RxVect1Que[ucSmapleCnt] = prAdapter->arStaRec[ucStaIdx].u4RxVector1;
+		ucSmapleCnt = (ucSmapleCnt + 1) % MCS_INFO_SAMPLE_CNT;
+	}
+
+	cnmTimerStartTimer(prAdapter, &prAdapter->rRxMcsInfoTimer, 100);
+}
+#endif
+
 #if defined(CFG_TEST_MGMT_FSM) && (CFG_TEST_MGMT_FSM != 0)
 /*----------------------------------------------------------------------------*/
 /*!
@@ -3245,7 +3288,9 @@ VOID aisFsmScanRequest(IN P_ADAPTER_T prAdapter, IN P_PARAM_SSID_T prSsid, IN PU
 /*----------------------------------------------------------------------------*/
 VOID
 aisFsmScanRequestAdv(IN P_ADAPTER_T prAdapter,
-		     IN UINT_8 ucSsidNum, IN P_PARAM_SSID_T prSsid, IN PUINT_8 pucIe, IN UINT_32 u4IeLength)
+	IN UINT_8 ucSsidNum, IN P_PARAM_SSID_T prSsid,
+	IN UINT_8 ucChannelListNum, IN P_RF_CHANNEL_INFO_T prChnlInfoList,
+	IN PUINT_8 pucIe, IN UINT_32 u4IeLength)
 {
 	UINT_32 i;
 	P_CONNECTION_SETTINGS_T prConnSettings;
@@ -3283,6 +3328,15 @@ aisFsmScanRequestAdv(IN P_ADAPTER_T prAdapter,
 		} else {
 			prAisFsmInfo->u4ScanIELength = 0;
 		}
+
+#if CFG_SCAN_CHANNEL_SPECIFIED
+		if (ucChannelListNum) {
+			prAisFsmInfo->ucScanChannelListNum = ucChannelListNum;
+			kalMemCopy(prAisFsmInfo->arScanChnlInfoList, prChnlInfoList,
+				sizeof(RF_CHANNEL_INFO_T) * prAisFsmInfo->ucScanChannelListNum);
+		} else
+			prAisFsmInfo->ucScanChannelListNum = 0;
+#endif
 
 		if (prAisFsmInfo->eCurrentState == AIS_STATE_NORMAL_TR) {
 			if (prAisBssInfo->eCurrentOPMode == OP_MODE_INFRASTRUCTURE

@@ -318,6 +318,10 @@ int priv_support_ioctl(IN struct net_device *prDev, IN OUT struct ifreq *prReq, 
 
 int priv_support_driver_cmd(IN struct net_device *prDev, IN OUT struct ifreq *prReq, IN int i4Cmd);
 
+#ifdef CFG_ANDROID_AOSP_PRIV_CMD
+int android_private_support_driver_cmd(IN struct net_device *prDev, IN OUT struct ifreq *prReq, IN int i4Cmd);
+#endif /* CFG_ANDROID_AOSP_PRIV_CMD */
+
 INT_32 priv_driver_cmds(IN struct net_device *prNetDev, IN PCHAR pcCommand, IN INT_32 i4TotalLen);
 
 int priv_driver_set_cfg(IN struct net_device *prNetDev, IN char *pcCommand, IN int i4TotalLen);

@@ -187,6 +187,12 @@ mtk_cfg80211_add_key(struct wiphy *wiphy,
 	INT_32 i4Rslt = -EINVAL;
 	UINT_32 u4BufLen = 0;
 	UINT_8 tmp1[8], tmp2[8];
+#if CFG_SUPPORT_REPLAY_DETECTION
+	P_BSS_INFO_T prBssInfo = NULL;
+	struct SEC_DETECT_REPLAY_INFO *prDetRplyInfo = NULL;
+	UINT_8 ucCheckZeroKey = 0;
+	UINT_8 i = 0;
+#endif
 
 	const UINT_8 aucBCAddr[] = BC_MAC_ADDR;
 	/* const UINT_8 aucZeroMacAddr[] = NULL_MAC_ADDR; */
@@ -253,11 +259,28 @@ mtk_cfg80211_add_key(struct wiphy *wiphy,
 		rKey.u4KeyIndex |= BIT(31);
 		rKey.u4KeyIndex |= BIT(30);
 		COPY_MAC_ADDR(rKey.arBSSID, mac_addr);
+
+		/* reset KCK, KEK, EAPOL Replay counter */
+		kalMemZero(prGlueInfo->rWpaInfo.aucKek, NL80211_KEK_LEN);
+		kalMemZero(prGlueInfo->rWpaInfo.aucKck, NL80211_KCK_LEN);
+		kalMemZero(prGlueInfo->rWpaInfo.aucReplayCtr, NL80211_REPLAY_CTR_LEN);
+
 	} else {		/* Group key */
 		COPY_MAC_ADDR(rKey.arBSSID, aucBCAddr);
 	}
 
 	if (params->key) {
+
+#if CFG_SUPPORT_REPLAY_DETECTION
+		for (i = 0; i < params->key_len; i++) {
+			if (params->key[i] == 0x00)
+				ucCheckZeroKey++;
+		}
+
+		if (ucCheckZeroKey == params->key_len)
+			return 0;
+#endif
+
 		kalMemCopy(rKey.aucKeyMaterial, params->key, params->key_len);
 		if (rKey.ucCipher == CIPHER_SUITE_TKIP) {
 			kalMemCopy(tmp1, &params->key[16], 8);
@@ -271,6 +294,27 @@ mtk_cfg80211_add_key(struct wiphy *wiphy,
 
 	rKey.u4KeyLength = params->key_len;
 	rKey.u4Length = ((ULONG)&(((P_PARAM_KEY_T) 0)->aucKeyMaterial)) + rKey.u4KeyLength;
+
+#if CFG_SUPPORT_REPLAY_DETECTION
+	prBssInfo = GET_BSS_INFO_BY_INDEX(prGlueInfo->prAdapter, prGlueInfo->prAdapter->prAisBssInfo->ucBssIndex);
+
+	prDetRplyInfo = &prBssInfo->rDetRplyInfo;
+
+	if ((!pairwise) && ((params->cipher == WLAN_CIPHER_SUITE_TKIP) || (params->cipher == WLAN_CIPHER_SUITE_CCMP))) {
+		if ((prDetRplyInfo->ucCurKeyId == key_index) &&
+			(!kalMemCmp(prDetRplyInfo->aucKeyMaterial, params->key, params->key_len))) {
+			DBGLOG(RSN, TRACE, "M3/G1, KeyID and KeyValue equal.\n");
+			DBGLOG(RSN, TRACE, "hit group key reinstall case, so no update BC/MC PN.\n");
+		} else {
+			kalMemCopy(prDetRplyInfo->arReplayPNInfo[key_index].auPN, params->seq, params->seq_len);
+			prDetRplyInfo->ucCurKeyId = key_index;
+			prDetRplyInfo->u4KeyLength = params->key_len;
+			kalMemCopy(prDetRplyInfo->aucKeyMaterial, params->key, params->key_len);
+		}
+
+		prDetRplyInfo->fgKeyRscFresh = TRUE;
+	}
+#endif
 
 	rStatus = kalIoctl(prGlueInfo, wlanoidSetAddKey, &rKey, rKey.u4Length, FALSE, FALSE, TRUE, &u4BufLen);
 
@@ -332,6 +376,11 @@ int mtk_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev, u8 key_in
 
 	prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
 	ASSERT(prGlueInfo);
+
+	if (g_u4HaltFlag) {
+		DBGLOG(RSN, WARN, "wlan is halt, skip key deletion\n");
+		return WLAN_STATUS_FAILURE;
+	}
 
 #if DBG
 	DBGLOG(RSN, TRACE, "mtk_cfg80211_del_key\n");
@@ -772,6 +821,7 @@ int mtk_cfg80211_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request
 
 	prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
 	ASSERT(prGlueInfo);
+	kalMemZero(&rScanRequest, sizeof(rScanRequest));
 
 	/* check if there is any pending scan/sched_scan not yet finished */
 	if (prGlueInfo->prScanRequest != NULL)
@@ -793,6 +843,32 @@ int mtk_cfg80211_scan(struct wiphy *wiphy, struct cfg80211_scan_request *request
 	rScanRequest.u4IELength = request->ie_len;
 	if (request->ie_len > 0)
 		rScanRequest.pucIE = (PUINT_8) (request->ie);
+
+#if CFG_SCAN_CHANNEL_SPECIFIED
+	DBGLOG(REQ, INFO, "scan channel num = %d\n", request->n_channels);
+
+	if (request->n_channels > MAXIMUM_OPERATION_CHANNEL_LIST) {
+		DBGLOG(REQ, WARN, "scan channel num (%d) exceeds %d, do a full scan instead\n",
+			   request->n_channels, MAXIMUM_OPERATION_CHANNEL_LIST);
+		rScanRequest.ucChannelListNum = 0;
+	} else {
+		rScanRequest.ucChannelListNum = request->n_channels;
+		for (i = 0; i < request->n_channels; i++) {
+			rScanRequest.arChnlInfoList[i].eBand =
+				kalCfg80211ToMtkBand(request->channels[i]->band);
+			rScanRequest.arChnlInfoList[i].u4CenterFreq1 = request->channels[i]->center_freq;
+			rScanRequest.arChnlInfoList[i].u4CenterFreq2 = 0;
+			rScanRequest.arChnlInfoList[i].u2PriChnlFreq = request->channels[i]->center_freq;
+#if KERNEL_VERSION(3, 12, 0) <= CFG80211_VERSION_CODE
+			rScanRequest.arChnlInfoList[i].ucChnlBw = request->scan_width;
+#else
+			rScanRequest.arChnlInfoList[i].ucChnlBw = 0;
+#endif
+			rScanRequest.arChnlInfoList[i].ucChannelNum =
+				ieee80211_frequency_to_channel(request->channels[i]->center_freq);
+		}
+	}
+#endif
 
 	rStatus = kalIoctl(prGlueInfo,
 			   wlanoidSetBssidListScanAdv,
@@ -834,6 +910,11 @@ int mtk_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev, struct cf
 	ENUM_PARAM_OP_MODE_T eOpMode;
 	UINT_32 i, u4AkmSuite = 0;
 	P_DOT11_RSNA_CONFIG_AUTHENTICATION_SUITES_ENTRY prEntry;
+#if CFG_SUPPORT_REPLAY_DETECTION
+	P_BSS_INFO_T prBssInfo = NULL;
+	struct SEC_DETECT_REPLAY_INFO *prDetRplyInfo = NULL;
+#endif
+
 
 	prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
 	ASSERT(prGlueInfo);
@@ -860,6 +941,16 @@ int mtk_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev, struct cf
 	prGlueInfo->rWpaInfo.u4CipherGroup = IW_AUTH_CIPHER_NONE;
 	prGlueInfo->rWpaInfo.u4CipherPairwise = IW_AUTH_CIPHER_NONE;
 	prGlueInfo->rWpaInfo.u4AuthAlg = IW_AUTH_ALG_OPEN_SYSTEM;
+
+#if CFG_SUPPORT_REPLAY_DETECTION
+	/* reset Detect replay information */
+	prBssInfo = GET_BSS_INFO_BY_INDEX(prGlueInfo->prAdapter, prGlueInfo->prAdapter->prAisBssInfo->ucBssIndex);
+
+	prDetRplyInfo = &prBssInfo->rDetRplyInfo;
+	kalMemZero(prDetRplyInfo, sizeof(struct SEC_DETECT_REPLAY_INFO));
+#endif
+
+
 #if CFG_SUPPORT_802_11W
 	prGlueInfo->rWpaInfo.u4Mfp = IW_AUTH_MFP_DISABLED;
 	switch (sme->mfp) {
@@ -1525,7 +1616,7 @@ int mtk_cfg80211_set_rekey_data(struct wiphy *wiphy, struct net_device *dev, str
 	prGtkData->u4KeyMgmt = prGlueInfo->rWpaInfo.u4KeyMgmt;
 	prGtkData->u4MgmtGroupCipher = 0;
 
-	prGtkData->ucRekeyDisable = FALSE;
+	prGtkData->ucRekeyMode = GTK_REKEY_CMD_MODE_OFFLOAD_ON;
 
 	rStatus = kalIoctl(prGlueInfo,
 			   wlanoidSetGtkRekeyData,
@@ -3195,10 +3286,7 @@ enum regd_state regd_state_machine(IN struct regulatory_request *pRequest)
 		return rlmDomainStateTransition(REGD_STATE_SET_WW_CORE, pRequest);
 
 	case NL80211_REGDOM_SET_BY_COUNTRY_IE:
-		DBGLOG(RLM, WARN, "============== WARNING ==============\n");
 		DBGLOG(RLM, WARN, "regd_state_machine: SET_BY_COUNTRY_IE\n");
-		DBGLOG(RLM, WARN, "Regulatory rule is updated by IE.\n");
-		DBGLOG(RLM, WARN, "============== WARNING ==============\n");
 
 		return rlmDomainStateTransition(REGD_STATE_SET_COUNTRY_IE, pRequest);
 
@@ -3249,6 +3337,11 @@ mtk_reg_notify(IN struct wiphy *pWiphy,
 
 	if (!pWiphy) {
 		DBGLOG(RLM, ERROR, "%s(): pWiphy = NULL.\n", __func__);
+		return;
+	}
+
+	if (g_u4HaltFlag) {
+		DBGLOG(RLM, WARN, "wlan is halt, skip reg callback\n");
 		return;
 	}
 

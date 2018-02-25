@@ -2388,7 +2388,6 @@ static INT_32 HQA_WriteBulkEEPROM(struct net_device *prNetDev,
 	ResponseToQA(HqaCmdFrame, prIwReqData, 2 + Len, i4Ret);
 
 exit:
-
 	kfree(Buffer);
 
 	return i4Ret;
@@ -3769,7 +3768,7 @@ static INT_32 HQA_WriteBufferDone(struct net_device *prNetDev,
 		goto label_exit;
 	kalMemCopy(prSetEfuseBufModeInfo->aBinContent, &uacEEPROMImage[u2InitAddr], u4ContentLen);
 
-	prSetEfuseBufModeInfo->ucSourceMode = 1;
+	prSetEfuseBufModeInfo->ucSourceMode = Value;
 
 	prSetEfuseBufModeInfo->ucCmdType = 0x1 | (prAdapter->rWifiVar.ucCalTimingCtrl << 4);
 	prSetEfuseBufModeInfo->ucCount   = 0xFF; /* ucCmdType 1 don't care the ucCount */

@@ -501,6 +501,10 @@ do { \
 	} \
 }
 
+#define HAL_IS_TX_DIRECT(_prAdapter) FALSE
+
+#define HAL_IS_RX_DIRECT(_prAdapter) FALSE
+
 #endif
 
 #if defined(_HIF_SDIO)
@@ -866,6 +870,10 @@ do { \
 	halWakeUpWiFi(_prAdapter);\
 }
 
+#define HAL_IS_TX_DIRECT(_prAdapter) FALSE
+
+#define HAL_IS_RX_DIRECT(_prAdapter) FALSE
+
 #endif
 
 #if defined(_HIF_USB)
@@ -998,6 +1006,12 @@ do { \
 		_u4ValidBufSize/*temp!!*//*4KByte*/) \
 }
 
+#define HAL_IS_TX_DIRECT(_prAdapter) \
+	((CFG_TX_DIRECT_USB) ? TRUE : FALSE)
+
+#define HAL_IS_RX_DIRECT(_prAdapter) \
+	((CFG_RX_DIRECT_USB) ? TRUE : FALSE)
+
 #endif
 
 #define INVALID_VERSION 0xFFFF /* used by HW/FW version */
@@ -1055,4 +1069,5 @@ VOID halPrintHifDbgInfo(IN P_ADAPTER_T prAdapter);
 BOOLEAN halIsTxResourceControlEn(IN P_ADAPTER_T prAdapter);
 VOID halTxResourceResetHwTQCounter(IN P_ADAPTER_T prAdapter);
 
+VOID halWpdmaSetup(P_GLUE_INFO_T prGlueInfo, BOOLEAN enable);
 #endif /* _HAL_H */

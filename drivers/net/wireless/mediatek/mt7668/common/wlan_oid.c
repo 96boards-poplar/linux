@@ -738,7 +738,13 @@ wlanoidSetBssidListScanAdv(IN P_ADAPTER_T prAdapter,
 	if (prAdapter->prGlueInfo->rRegInfo.u4RddTestMode) {
 		if ((prAdapter->fgEnOnlineScan == TRUE) && (prAdapter->ucRddStatus)) {
 			if (kalGetMediaStateIndicated(prAdapter->prGlueInfo) != PARAM_MEDIA_STATE_CONNECTED)
-				aisFsmScanRequestAdv(prAdapter, ucSsidNum, rSsid, pucIe, u4IeLength);
+#if CFG_SCAN_CHANNEL_SPECIFIED
+				aisFsmScanRequestAdv(prAdapter, ucSsidNum, rSsid,
+					prScanRequest->ucChannelListNum, prScanRequest->arChnlInfoList,
+					pucIe, u4IeLength);
+#else
+				aisFsmScanRequestAdv(prAdapter, ucSsidNum, rSsid, 0, NULL, pucIe, u4IeLength);
+#endif
 			else
 				return WLAN_STATUS_FAILURE;
 		} else
@@ -747,9 +753,21 @@ wlanoidSetBssidListScanAdv(IN P_ADAPTER_T prAdapter,
 #endif
 	{
 		if (prAdapter->fgEnOnlineScan == TRUE)
-			aisFsmScanRequestAdv(prAdapter, ucSsidNum, rSsid, pucIe, u4IeLength);
+#if CFG_SCAN_CHANNEL_SPECIFIED
+			aisFsmScanRequestAdv(prAdapter, ucSsidNum, rSsid,
+				prScanRequest->ucChannelListNum, prScanRequest->arChnlInfoList,
+				pucIe, u4IeLength);
+#else
+			aisFsmScanRequestAdv(prAdapter, ucSsidNum, rSsid, 0, NULL, pucIe, u4IeLength);
+#endif
 		else if (kalGetMediaStateIndicated(prAdapter->prGlueInfo) != PARAM_MEDIA_STATE_CONNECTED)
-			aisFsmScanRequestAdv(prAdapter, ucSsidNum, rSsid, pucIe, u4IeLength);
+#if CFG_SCAN_CHANNEL_SPECIFIED
+			aisFsmScanRequestAdv(prAdapter, ucSsidNum, rSsid,
+				prScanRequest->ucChannelListNum, prScanRequest->arChnlInfoList,
+				pucIe, u4IeLength);
+#else
+			aisFsmScanRequestAdv(prAdapter, ucSsidNum, rSsid, 0, NULL, pucIe, u4IeLength);
+#endif
 		else
 			return WLAN_STATUS_FAILURE;
 	}
@@ -839,7 +857,7 @@ wlanoidSetBssid(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4Set
 	/* Send AIS Abort Message */
 	prAisAbortMsg = (P_MSG_AIS_ABORT_T) cnmMemAlloc(prAdapter, RAM_TYPE_MSG, sizeof(MSG_AIS_ABORT_T));
 	if (!prAisAbortMsg) {
-		ASSERT(0);
+		DBGLOG(REQ, ERROR, "Fail in allocating AisAbortMsg.\n");
 		return WLAN_STATUS_FAILURE;
 	}
 
@@ -975,7 +993,7 @@ wlanoidSetSsid(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4SetB
 	/* Send AIS Abort Message */
 	prAisAbortMsg = (P_MSG_AIS_ABORT_T) cnmMemAlloc(prAdapter, RAM_TYPE_MSG, sizeof(MSG_AIS_ABORT_T));
 	if (!prAisAbortMsg) {
-		ASSERT(0);
+		DBGLOG(REQ, ERROR, "Fail in allocating AisAbortMsg.\n");
 		return WLAN_STATUS_FAILURE;
 	}
 
@@ -1051,7 +1069,7 @@ wlanoidSetConnect(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4S
 	}
 	prAisAbortMsg = (P_MSG_AIS_ABORT_T) cnmMemAlloc(prAdapter, RAM_TYPE_MSG, sizeof(MSG_AIS_ABORT_T));
 	if (!prAisAbortMsg) {
-		ASSERT(0);
+		DBGLOG(REQ, ERROR, "Fail in allocating AisAbortMsg.\n");
 		return WLAN_STATUS_FAILURE;
 	}
 	prAisAbortMsg->rMsgHdr.eMsgId = MID_OID_AIS_FSM_JOIN_REQ;
@@ -1066,6 +1084,7 @@ wlanoidSetConnect(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4S
 
 	prGlueInfo = prAdapter->prGlueInfo;
 	kalMemZero(prConnSettings->aucSSID, sizeof(prConnSettings->aucSSID));
+	prConnSettings->ucSSIDLen = 0;
 	kalMemZero(prConnSettings->aucBSSID, sizeof(prConnSettings->aucBSSID));
 	prConnSettings->eConnectionPolicy = CONNECT_BY_SSID_ANY;
 	prConnSettings->fgIsConnByBssidIssued = FALSE;
@@ -2279,8 +2298,13 @@ wlanoidSetAddKey(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4Se
 	/* compose CMD_802_11_KEY cmd pkt */
 	prCmdInfo->eCmdType = COMMAND_TYPE_NETWORK_IOCTL;
 	prCmdInfo->u2InfoBufLen = CMD_HDR_SIZE + sizeof(CMD_802_11_KEY);
+#if CFG_SUPPORT_REPLAY_DETECTION
+	prCmdInfo->pfCmdDoneHandler = nicCmdEventSetAddKey;
+	prCmdInfo->pfCmdTimeoutHandler = nicOidCmdTimeoutSetAddKey;
+#else
 	prCmdInfo->pfCmdDoneHandler = nicCmdEventSetCommon;
 	prCmdInfo->pfCmdTimeoutHandler = nicOidCmdTimeoutCommon;
+#endif
 	prCmdInfo->fgIsOid = TRUE;
 	prCmdInfo->ucCID = CMD_ID_ADD_REMOVE_KEY;
 	prCmdInfo->fgSetQuery = TRUE;
@@ -2523,6 +2547,12 @@ wlanoidSetAddKey(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4Se
 					kalMemCopy(prCmdKey->aucPeerAddr, prBssInfo->aucOwnMacAddr, MAC_ADDR_LEN);
 				}
 
+				/* overflow check */
+				if (prCmdKey->ucKeyId >= MAX_KEY_NUM) {
+					DBGLOG(RSN, ERROR, "invalid keyId: %d\n", prCmdKey->ucKeyId);
+					prCmdKey->ucKeyId &= 0x3;
+				}
+
 				if (fgNoHandshakeSec) {	/* WEP: STA and AP */
 					prBssInfo->wepkeyWlanIdx = prCmdKey->ucWlanIndex;
 					prBssInfo->wepkeyUsed[prCmdKey->ucKeyId] = TRUE;
@@ -2535,6 +2565,7 @@ wlanoidSetAddKey(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4Se
 					DBGLOG(RSN, INFO, "BMCWlanIndex kid = %d, index = %d\n", prCmdKey->ucKeyId,
 					       prCmdKey->ucWlanIndex);
 				}
+
 				if (prCmdKey->ucTxKey) {	/* */
 					prBssInfo->fgBcDefaultKeyExist = TRUE;
 					prBssInfo->ucBcDefaultKeyIdx = prCmdKey->ucKeyId;
@@ -5509,6 +5540,133 @@ wlanoidQueryCalBackupV2(IN P_ADAPTER_T prAdapter,
 
 /*----------------------------------------------------------------------------*/
 /*!
+* \brief This routine is called to do Coex Isolation Detection.
+
+* \param[in] pvAdapter Pointer to the Adapter structure.
+* \param[out] pvQueryBuf A pointer to the buffer that holds the result of
+*                                   the query.
+* \param[in] u4QueryBufLen The length of the query buffer.
+* \param[out] pu4QueryInfoLen If the call is successful, returns the number of
+*                                   bytes written into the query buffer. If the call
+*                                   failed due to invalid length of the query buffer,
+*                            returns the amount of storage needed.
+*
+* \retval WLAN_STATUS_SUCCESS* \retval WLAN_STATUS_INVALID_LENGTH
+*/
+/*----------------------------------------------------------------------------*/
+WLAN_STATUS
+wlanoidQueryCoexIso(IN P_ADAPTER_T prAdapter,
+		    IN PVOID pvQueryBuffer, IN UINT_32 u4QueryBufferLen, OUT PUINT_32 pu4QueryInfoLen)
+{
+	struct PARAM_COEX_CTRL *prParaCoexCtrl;
+	struct PARAM_COEX_ISO_DETECT *prParaCoexIsoDetect;
+	struct CMD_COEX_CTRL rCmdCoexCtrl;
+	struct CMD_COEX_ISO_DETECT rCmdCoexIsoDetect;
+
+	DBGLOG(INIT, LOUD, "\n");
+
+	ASSERT(prAdapter);
+	ASSERT(pu4QueryInfoLen);
+
+	if (u4QueryBufferLen)
+		ASSERT(pvQueryBuffer);
+
+	*pu4QueryInfoLen = sizeof(struct PARAM_COEX_CTRL);
+
+	if (u4QueryBufferLen < sizeof(struct PARAM_COEX_CTRL))
+		return WLAN_STATUS_INVALID_LENGTH;
+
+	prParaCoexCtrl = (struct PARAM_COEX_CTRL *) pvQueryBuffer;
+	prParaCoexIsoDetect = (struct PARAM_COEX_ISO_DETECT *) &prParaCoexCtrl->aucBuffer[0];
+
+	rCmdCoexIsoDetect.u4Channel = prParaCoexIsoDetect->u4Channel;
+	/*rCmdCoexIsoDetect.u4Band = prParaCoexIsoDetect->u4Band;*/
+	rCmdCoexIsoDetect.u4IsoPath = prParaCoexIsoDetect->u4IsoPath;
+	rCmdCoexIsoDetect.u4Isolation = prParaCoexIsoDetect->u4Isolation;
+
+	rCmdCoexCtrl.u4SubCmd = prParaCoexCtrl->u4SubCmd;
+
+	/* Copy Memory */
+	kalMemCopy(rCmdCoexCtrl.aucBuffer, &rCmdCoexIsoDetect, sizeof(rCmdCoexIsoDetect));
+
+	return wlanSendSetQueryCmd(prAdapter,
+				CMD_ID_COEX_CTRL,
+				FALSE,
+				TRUE,
+				TRUE,
+				nicCmdEventQueryCoexIso,
+				nicOidCmdTimeoutCommon,
+				sizeof(struct CMD_COEX_CTRL),
+				(unsigned char *) &rCmdCoexCtrl,
+				pvQueryBuffer,
+				u4QueryBufferLen);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+* \brief This routine is called to get coex information.
+
+* \param[in] pvAdapter Pointer to the Adapter structure.
+* \param[out] pvQueryBuf A pointer to the buffer that holds the result of
+*                                   the query.
+* \param[in] u4QueryBufLen The length of the query buffer.
+* \param[out] pu4QueryInfoLen If the call is successful, returns the number of
+*                                   bytes written into the query buffer. If the call
+*                                   failed due to invalid length of the query buffer,
+*                            returns the amount of storage needed.
+*
+* \retval WLAN_STATUS_SUCCESS* \retval WLAN_STATUS_INVALID_LENGTH
+*/
+/*----------------------------------------------------------------------------*/
+WLAN_STATUS
+wlanoidQueryCoexGetInfo(IN P_ADAPTER_T prAdapter,
+		    IN PVOID pvQueryBuffer, IN UINT_32 u4QueryBufferLen, OUT PUINT_32 pu4QueryInfoLen)
+{
+	struct PARAM_COEX_CTRL *prParaCoexCtrl;
+	struct PARAM_COEX_GET_INFO *prParaCoexGetInfo;
+	struct CMD_COEX_CTRL rCmdCoexCtrl;
+	struct CMD_COEX_GET_INFO rCmdCoexGetInfo;
+
+	DBGLOG(INIT, LOUD, "\n");
+
+	ASSERT(prAdapter);
+	ASSERT(pu4QueryInfoLen);
+
+	if (u4QueryBufferLen)
+		ASSERT(pvQueryBuffer);
+
+	*pu4QueryInfoLen = sizeof(struct PARAM_COEX_CTRL);
+
+	if (u4QueryBufferLen < sizeof(struct PARAM_COEX_CTRL))
+		return WLAN_STATUS_INVALID_LENGTH;
+
+	prParaCoexCtrl = (struct PARAM_COEX_CTRL *) pvQueryBuffer;
+	prParaCoexGetInfo = (struct PARAM_COEX_GET_INFO *) &prParaCoexCtrl->aucBuffer[0];
+
+	kalMemZero(rCmdCoexGetInfo.u4CoexInfo, sizeof(rCmdCoexGetInfo.u4CoexInfo));
+
+	rCmdCoexCtrl.u4SubCmd = prParaCoexCtrl->u4SubCmd;
+
+	/* Copy Memory */
+	kalMemCopy(rCmdCoexCtrl.aucBuffer, &rCmdCoexGetInfo, sizeof(rCmdCoexGetInfo));
+	DBGLOG(REQ, INFO, "wlanoidQueryCoexGetInfo end\n");
+
+	return wlanSendSetQueryCmd(prAdapter,
+				CMD_ID_COEX_CTRL,
+				FALSE,
+				TRUE,
+				TRUE,
+				nicCmdEventQueryCoexGetInfo,
+				nicOidCmdTimeoutCommon,
+				sizeof(struct CMD_COEX_CTRL),
+				(unsigned char *) &rCmdCoexCtrl,
+				pvQueryBuffer,
+				u4QueryBufferLen);
+
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
 * \brief This routine is called to query MCR value.
 *
 * \param[in] pvAdapter Pointer to the Adapter structure.
@@ -5930,6 +6088,7 @@ wlanoidQueryDrvMcrRead(IN P_ADAPTER_T prAdapter,
 
 	prMcrRdInfo = (P_PARAM_CUSTOM_MCR_RW_STRUCT_T) pvQueryBuffer;
 
+	ACQUIRE_POWER_CONTROL_FROM_PM(prAdapter);
 	HAL_MCR_RD(prAdapter, (prMcrRdInfo->u4McrOffset & BITS(2, 31)), &prMcrRdInfo->u4McrData);
 
 	DBGLOG(INIT, TRACE, "DRV MCR Read: Offset = %#08lx, Data = %#08lx\n",
@@ -5977,6 +6136,7 @@ wlanoidSetDrvMcrWrite(IN P_ADAPTER_T prAdapter,
 
 	prMcrWrInfo = (P_PARAM_CUSTOM_MCR_RW_STRUCT_T) pvSetBuffer;
 
+	ACQUIRE_POWER_CONTROL_FROM_PM(prAdapter);
 	HAL_MCR_WR(prAdapter, (prMcrWrInfo->u4McrOffset & BITS(2, 31)), prMcrWrInfo->u4McrData);
 
 	DBGLOG(INIT, TRACE, "DRV MCR Write: Offset = %#08lx, Data = %#08lx\n",
@@ -7676,7 +7836,7 @@ wlanoidSetDisassociate(IN P_ADAPTER_T prAdapter,
 	/* Send AIS Abort Message */
 	prAisAbortMsg = (P_MSG_AIS_ABORT_T) cnmMemAlloc(prAdapter, RAM_TYPE_MSG, sizeof(MSG_AIS_ABORT_T));
 	if (!prAisAbortMsg) {
-		ASSERT(0);
+		DBGLOG(REQ, ERROR, "Fail in creating AisAbortMsg.\n");
 		return WLAN_STATUS_FAILURE;
 	}
 
@@ -7765,13 +7925,11 @@ wlanoidSet802dot11PowerSaveProfile(IN P_ADAPTER_T prAdapter,
 	P_PARAM_POWER_MODE_T prPowerMode;
 	P_BSS_INFO_T prBssInfo;
 
-#if !DBG_DISABLE_ALL_LOG
 	const PUINT_8 apucPsMode[Param_PowerModeMax] = {
 		(PUINT_8) "CAM",
 		(PUINT_8) "MAX PS",
 		(PUINT_8) "FAST PS"
 	};
-#endif
 
 	DEBUGFUNC("wlanoidSet802dot11PowerSaveProfile");
 
@@ -11699,7 +11857,11 @@ WLAN_STATUS
 wlanoidAdvCtrl(IN P_ADAPTER_T prAdapter,
 	OUT PVOID pvQueryBuffer, IN UINT_32 u4QueryBufferLen, OUT PUINT_32 pu4QueryInfoLen)
 {
-	P_CMD_PTA_CONFIG_T cmd;
+	P_CMD_ADV_CONFIG_HEADER_T cmd;
+	UINT_16 type = 0;
+	UINT_32 len;
+	BOOLEAN fgSetQuery = FALSE;
+	BOOLEAN fgNeedResp = TRUE;
 
 	DBGLOG(REQ, LOUD, "%s>\n", __func__);
 
@@ -11707,8 +11869,6 @@ wlanoidAdvCtrl(IN P_ADAPTER_T prAdapter,
 	if (u4QueryBufferLen)
 		ASSERT(pvQueryBuffer);
 	ASSERT(pu4QueryInfoLen);
-
-	*pu4QueryInfoLen = sizeof(*cmd);
 
 	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
 		DBGLOG(REQ, WARN,
@@ -11721,17 +11881,41 @@ wlanoidAdvCtrl(IN P_ADAPTER_T prAdapter,
 		return WLAN_STATUS_INVALID_LENGTH;
 	}
 
-	cmd = (P_CMD_PTA_CONFIG_T)pvQueryBuffer;
+	cmd = (P_CMD_ADV_CONFIG_HEADER_T)pvQueryBuffer;
+
+	if (cmd->u2Type & CMD_ADV_CONTROL_SET) {
+		fgSetQuery = TRUE;
+		fgNeedResp = FALSE;
+	}
+
+	type = cmd->u2Type;
+	type &= ~CMD_ADV_CONTROL_SET;
 	DBGLOG(RSN, INFO, "%s cmd type %d\n", __func__, cmd->u2Type);
+	switch (type) {
+	case CMD_PTA_CONFIG_TYPE:
+		*pu4QueryInfoLen = sizeof(CMD_PTA_CONFIG_T);
+		len = sizeof(CMD_PTA_CONFIG_T);
+		break;
+	case CMD_GET_REPORT_TYPE:
+		*pu4QueryInfoLen = sizeof(struct CMD_GET_TRAFFIC_REPORT);
+		len = sizeof(struct CMD_GET_TRAFFIC_REPORT);
+		break;
+	case CMD_NOISE_HISTOGRAM_TYPE:
+		*pu4QueryInfoLen = sizeof(struct CMD_NOISE_HISTOGRAM_REPORT);
+		len = sizeof(struct CMD_NOISE_HISTOGRAM_REPORT);
+		break;
+	default:
+		return WLAN_STATUS_INVALID_LENGTH;
+	}
 
 	return wlanSendSetQueryCmd(prAdapter,
 				   CMD_ID_ADV_CONTROL,
-				   FALSE,
-				   TRUE,
+				   fgSetQuery,
+				   fgNeedResp,
 				   TRUE,
 				   nicCmdEventQueryAdvCtrl,
 				   nicOidCmdTimeoutCommon,
-				   sizeof(*cmd), (PUINT_8)cmd,
+				   len, (PUINT_8)cmd,
 				   pvQueryBuffer, u4QueryBufferLen);
 }
 #endif
@@ -11827,6 +12011,48 @@ wlanoidQueryMibInfo(IN P_ADAPTER_T prAdapter,
 }				/* wlanoidQueryMibInfo */
 #endif
 
+#if CFG_SUPPORT_LAST_SEC_MCS_INFO
+WLAN_STATUS
+wlanoidTxMcsInfo(IN P_ADAPTER_T prAdapter,
+		       IN PVOID pvQueryBuffer, IN UINT_32 u4QueryBufferLen, OUT PUINT_32 pu4QueryInfoLen)
+{
+	struct PARAM_TX_MCS_INFO *prMcsInfo;
+
+	DEBUGFUNC("wlanoidQueryWlanInfo");
+	DBGLOG(REQ, LOUD, "\n");
+
+	ASSERT(prAdapter);
+	if (u4QueryBufferLen)
+		ASSERT(pvQueryBuffer);
+	ASSERT(pu4QueryInfoLen);
+
+	*pu4QueryInfoLen = sizeof(struct PARAM_TX_MCS_INFO);
+
+	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
+		DBGLOG(REQ, WARN,
+		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+		*pu4QueryInfoLen = sizeof(UINT_32);
+		return WLAN_STATUS_ADAPTER_NOT_READY;
+	} else if (u4QueryBufferLen < sizeof(struct PARAM_TX_MCS_INFO)) {
+		DBGLOG(REQ, WARN, "Too short length %ld\n", u4QueryBufferLen);
+		return WLAN_STATUS_INVALID_LENGTH;
+	}
+
+	prMcsInfo = (struct PARAM_TX_MCS_INFO *)pvQueryBuffer;
+
+	return wlanSendSetQueryCmd(prAdapter,
+				   CMD_ID_TX_MCS_INFO,
+				   FALSE,
+				   TRUE,
+				   TRUE,
+				   nicCmdEventTxMcsInfo,
+				   nicOidCmdTimeoutCommon,
+				   sizeof(struct PARAM_TX_MCS_INFO), (PUINT_8)prMcsInfo,
+				   pvQueryBuffer, u4QueryBufferLen);
+
+}
+#endif
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -11854,6 +12080,7 @@ wlanoidSetFwLog2Host(
 	OUT PUINT_32 pu4SetInfoLen)
 {
 	P_CMD_FW_LOG_2_HOST_CTRL_T prFwLog2HostCtrl;
+	UINT_64 ts = KAL_GET_HOST_CLOCK();
 
 	DEBUGFUNC("wlanoidSetFwLog2Host");
 
@@ -11876,8 +12103,16 @@ wlanoidSetFwLog2Host(
 	}
 
 	prFwLog2HostCtrl = (P_CMD_FW_LOG_2_HOST_CTRL_T)pvSetBuffer;
+	prFwLog2HostCtrl->u4HostTimeMSec = (UINT_32)(do_div(ts, 1000000000) / 1000);
+	prFwLog2HostCtrl->u4HostTimeSec = (UINT_32)ts;
 
-	DBGLOG(REQ, INFO, "McuDest %d, LogType %d\n", prFwLog2HostCtrl->ucMcuDest, prFwLog2HostCtrl->ucFwLog2HostCtrl);
+#if CFG_SUPPORT_FW_DBG_LEVEL_CTRL
+	DBGLOG(REQ, INFO, "McuDest %d, LogType %d, (FwLogLevel %d)\n", prFwLog2HostCtrl->ucMcuDest,
+		prFwLog2HostCtrl->ucFwLog2HostCtrl, prFwLog2HostCtrl->ucFwLogLevel);
+#else
+	DBGLOG(REQ, INFO, "McuDest %d, LogType %d\n", prFwLog2HostCtrl->ucMcuDest,
+		prFwLog2HostCtrl->ucFwLog2HostCtrl);
+#endif
 
 	return wlanSendSetQueryCmd(prAdapter,
 				CMD_ID_FW_LOG_2_HOST,
@@ -12175,3 +12410,84 @@ wlanoidLinkDown(IN P_ADAPTER_T prAdapter,
 	return WLAN_STATUS_SUCCESS;
 }				/* wlanoidSetDisassociate */
 
+WLAN_STATUS
+wlanoidSetCSIControl(
+	IN P_ADAPTER_T prAdapter,
+	IN PVOID pvSetBuffer,
+	IN UINT_32 u4SetBufferLen,
+	OUT PUINT_32 pu4SetInfoLen)
+{
+	struct CMD_CSI_CONTROL_T *pCSICtrl;
+
+	DEBUGFUNC("wlanoidSetCSIControl");
+
+	*pu4SetInfoLen = sizeof(struct CMD_CSI_CONTROL_T);
+
+	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
+		DBGLOG(REQ, WARN,
+			   "Fail in set CSI control! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+			   prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+		return WLAN_STATUS_ADAPTER_NOT_READY;
+	} else if (u4SetBufferLen < sizeof(struct CMD_CSI_CONTROL_T)) {
+		DBGLOG(REQ, WARN, "Too short length %lu\n", u4SetBufferLen);
+		return WLAN_STATUS_INVALID_LENGTH;
+	}
+
+	pCSICtrl = (struct CMD_CSI_CONTROL_T *)pvSetBuffer;
+
+	return wlanSendSetQueryCmd(prAdapter,
+				CMD_ID_CSI_CONTROL,
+				TRUE,
+				FALSE,
+				TRUE,
+				nicCmdEventSetCommon,
+				nicOidCmdTimeoutCommon,
+				sizeof(struct CMD_CSI_CONTROL_T),
+				(PUINT_8)pCSICtrl, pvSetBuffer, u4SetBufferLen);
+}
+
+WLAN_STATUS
+wlanoidGetTxPwrTbl(IN P_ADAPTER_T prAdapter,
+		   IN PVOID pvQueryBuffer,
+		   IN UINT_32 u4QueryBufferLen,
+		   OUT PUINT_32 pu4QueryInfoLen)
+{
+	struct CMD_GET_TXPWR_TBL CmdPwrTbl;
+	struct PARAM_CMD_GET_TXPWR_TBL *prPwrTbl = NULL;
+
+	DEBUGFUNC("wlanoidGetTxPwrTbl");
+	DBGLOG(REQ, LOUD, "\n");
+
+	if (!prAdapter || (!pvQueryBuffer && u4QueryBufferLen) ||
+	    !pu4QueryInfoLen)
+		return WLAN_STATUS_INVALID_DATA;
+
+	*pu4QueryInfoLen = sizeof(struct PARAM_CMD_GET_TXPWR_TBL);
+
+	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
+		DBGLOG(REQ, WARN,
+		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+		*pu4QueryInfoLen = sizeof(UINT_32);
+		return WLAN_STATUS_ADAPTER_NOT_READY;
+	} else if (u4QueryBufferLen < sizeof(struct PARAM_CMD_GET_TXPWR_TBL)) {
+		DBGLOG(REQ, WARN, "Too short length %ld\n", u4QueryBufferLen);
+		return WLAN_STATUS_INVALID_LENGTH;
+	}
+
+	prPwrTbl = (struct PARAM_CMD_GET_TXPWR_TBL *)pvQueryBuffer;
+	CmdPwrTbl.ucDbdcIdx = prPwrTbl->ucDbdcIdx;
+
+	return wlanSendSetQueryCmd(prAdapter,
+				   CMD_ID_GET_TXPWR_TBL,
+				   FALSE,
+				   TRUE,
+				   TRUE,
+				   nicCmdEventGetTxPwrTbl,
+				   nicOidCmdTimeoutCommon,
+				   sizeof(struct CMD_GET_TXPWR_TBL),
+				   (PUINT_8)&CmdPwrTbl,
+				   pvQueryBuffer,
+				   u4QueryBufferLen);
+
+}

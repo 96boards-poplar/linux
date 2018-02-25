@@ -933,7 +933,7 @@ VOID rlmDomainSendCmd(P_ADAPTER_T prAdapter, BOOLEAN fgIsOid)
 VOID rlmDomainSendDomainInfoCmd_V2(P_ADAPTER_T prAdapter, BOOLEAN fgIsOid)
 {
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
-	u8 max_channel_count;
+	u8 max_channel_count = 0;
 	u32 buff_max_size, buff_valid_size;
 	P_CMD_SET_DOMAIN_INFO_V2_T prCmd;
 	struct acctive_channel_list *prChs;
@@ -941,8 +941,10 @@ VOID rlmDomainSendDomainInfoCmd_V2(P_ADAPTER_T prAdapter, BOOLEAN fgIsOid)
 
 
 	pWiphy = priv_to_wiphy(prAdapter->prGlueInfo);
-	max_channel_count = pWiphy->bands[KAL_BAND_2GHZ]->n_channels
-						+ pWiphy->bands[KAL_BAND_5GHZ]->n_channels;
+	if (pWiphy->bands[KAL_BAND_2GHZ] != NULL)
+		max_channel_count += pWiphy->bands[KAL_BAND_2GHZ]->n_channels;
+	if (pWiphy->bands[KAL_BAND_5GHZ] != NULL)
+		max_channel_count += pWiphy->bands[KAL_BAND_5GHZ]->n_channels;
 
 	if (max_channel_count == 0) {
 		DBGLOG(RLM, ERROR, "%s, invalid channel count.\n", __func__);
@@ -1890,17 +1892,17 @@ BOOL rlmDomainTxPwrLimitLoadFromFile(P_ADAPTER_T prAdapter,
 	kalMemZero(pucConfigBuf, WLAN_TX_PWR_LIMIT_FILE_BUF_SIZE);
 	u4ConfigReadLen = 0;
 
-	if (wlanGetFileContent(prAdapter, "/storage/sdcard0/" WLAN_TX_PWR_LIMIT_FILE_NAME, pucConfigBuf,
-			  WLAN_TX_PWR_LIMIT_FILE_BUF_SIZE, &u4ConfigReadLen, FALSE) == 0) {
+	if (wlanGetFileContent(prAdapter, WLAN_TX_PWR_LIMIT_FILE_NAME, pucConfigBuf,
+				 WLAN_TX_PWR_LIMIT_FILE_BUF_SIZE, &u4ConfigReadLen, TRUE) == 0) {
+		/* ToDo:: Nothing */
+	} else if (wlanGetFileContent(prAdapter, "/storage/sdcard0/" WLAN_TX_PWR_LIMIT_FILE_NAME, pucConfigBuf,
+				 WLAN_TX_PWR_LIMIT_FILE_BUF_SIZE, &u4ConfigReadLen, FALSE) == 0) {
 		/* ToDo:: Nothing */
 	} else if (wlanGetFileContent(prAdapter, "/data/misc/" WLAN_TX_PWR_LIMIT_FILE_NAME, pucConfigBuf,
 				 WLAN_TX_PWR_LIMIT_FILE_BUF_SIZE, &u4ConfigReadLen, FALSE) == 0) {
 		/* ToDo:: Nothing */
 	} else if (wlanGetFileContent(prAdapter, "/data/misc/wifi/" WLAN_TX_PWR_LIMIT_FILE_NAME, pucConfigBuf,
 				 WLAN_TX_PWR_LIMIT_FILE_BUF_SIZE, &u4ConfigReadLen, FALSE) == 0) {
-		/* ToDo:: Nothing */
-	} else if (wlanGetFileContent(prAdapter, WLAN_TX_PWR_LIMIT_FILE_NAME, pucConfigBuf,
-				 WLAN_TX_PWR_LIMIT_FILE_BUF_SIZE, &u4ConfigReadLen, TRUE) == 0) {
 		/* ToDo:: Nothing */
 	} else {
 		bRet = FALSE;
@@ -2402,7 +2404,7 @@ VOID rlmDomainSendPwrLimitCmd_V2(P_ADAPTER_T prAdapter)
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
 	WLAN_STATUS rStatus;
 	UINT_32 u4SetQueryInfoLen;
-	UINT32 ch_cnt;
+	UINT_32 ch_cnt;
 	struct wiphy *wiphy;
 	u8 band_idx, ch_idx;
 	P_CMD_SET_COUNTRY_CHANNEL_POWER_LIMIT_V2_T prCmd[KAL_NUM_BANDS] = {NULL};
@@ -2818,9 +2820,7 @@ void rlmDomainSetTempCountryCode(char *alpha2, u8 size_of_alpha2)
 enum regd_state rlmDomainStateTransition(enum regd_state request_state, struct regulatory_request *pRequest)
 {
 	enum regd_state next_state, old_state;
-#if !DBG_DISABLE_ALL_LOG
 	bool the_same = 0;
-#endif
 
 	old_state = g_mtk_regd_control.state;
 	next_state = REGD_STATE_INVALID;
@@ -2931,6 +2931,11 @@ void rlmDomainParsingChannel(IN struct wiphy *pWiphy)
 	struct ieee80211_channel *chan;
 	struct channel *pCh;
 	char chan_flag_string[64] = {0};
+	P_GLUE_INFO_T prGlueInfo;
+	UINT_8 ucChannelNum = 0;
+	BOOLEAN fgDisconnection = FALSE;
+	WLAN_STATUS rStatus;
+	UINT_32 u4BufLen;
 
 
 	if (!pWiphy) {
@@ -2939,6 +2944,12 @@ void rlmDomainParsingChannel(IN struct wiphy *pWiphy)
 		return;
 	}
 
+	/* Retrieve connected channel */
+	prGlueInfo = rlmDomainGetGlueInfo();
+	if (prGlueInfo && kalGetMediaStateIndicated(prGlueInfo) == PARAM_MEDIA_STATE_CONNECTED) {
+		ucChannelNum = wlanGetChannelNumberByNetwork(prGlueInfo->prAdapter,
+							     prGlueInfo->prAdapter->prAisBssInfo->ucBssIndex);
+	}
 
 	/*
 	 * Ready to parse the channel for bands
@@ -2963,6 +2974,11 @@ void rlmDomainParsingChannel(IN struct wiphy *pWiphy)
 				DBGLOG(RLM, INFO, "channels[%d][%d]: ch%d (freq = %d) flags=0x%x [ %s]\n",
 				    band_idx, ch_idx, chan->hw_value, chan->center_freq, chan->flags,
 				    chan_flag_string);
+
+				/* Disconnect AP in the end of this function*/
+				if (chan->hw_value == ucChannelNum)
+					fgDisconnection = TRUE;
+
 				continue;
 			}
 
@@ -2984,6 +3000,15 @@ void rlmDomainParsingChannel(IN struct wiphy *pWiphy)
 			ch_count += 1;
 		}
 
+	}
+
+	/* Disconnect with AP if connected channel is disabled in new country */
+	if (fgDisconnection) {
+		DBGLOG(RLM, STATE, "Disconnect! CH%d is DISABLED in this country\n", ucChannelNum);
+		rStatus = kalIoctl(prGlueInfo, wlanoidSetDisassociate, NULL, 0, FALSE, FALSE, TRUE, &u4BufLen);
+
+		if (rStatus != WLAN_STATUS_SUCCESS)
+			DBGLOG(RLM, WARN, "disassociate error:%lx\n", rStatus);
 	}
 }
 void rlmExtractChannelInfo(u32 max_ch_count, struct acctive_channel_list *prBuff)

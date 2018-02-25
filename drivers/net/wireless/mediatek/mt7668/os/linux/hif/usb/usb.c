@@ -167,6 +167,14 @@ static struct usb_driver mtk_usb_driver = {
 *                   F U N C T I O N   D E C L A R A T I O N S
 ********************************************************************************
 */
+static int mtk_usb_probe(struct usb_interface *intf, const struct usb_device_id *id);
+static void mtk_usb_disconnect(struct usb_interface *intf);
+static int mtk_usb_suspend(struct usb_interface *intf, pm_message_t message);
+static int mtk_usb_resume(struct usb_interface *intf);
+static int mtk_usb_reset_resume(struct usb_interface *intf);
+static int mtk_usb_bulk_in_msg(IN P_GL_HIF_INFO_T prHifInfo, IN UINT_32 len, OUT UCHAR * buffer, int InEp);
+static int mtk_usb_intr_in_msg(IN P_GL_HIF_INFO_T prHifInfo, IN UINT_32 len, OUT UCHAR * buffer, int InEp);
+static int mtk_usb_bulk_out_msg(IN P_GL_HIF_INFO_T prHifInfo, IN UINT_32 len, IN UCHAR * buffer, int OutEp);
 
 /*******************************************************************************
 *                              F U N C T I O N S
@@ -226,8 +234,10 @@ static void mtk_usb_disconnect(struct usb_interface *intf)
 
 	ASSERT(intf);
 	prGlueInfo  = (P_GLUE_INFO_T)usb_get_intfdata(intf);
-
-	prGlueInfo->rHifInfo.state = USB_STATE_LINK_DOWN;
+	if (prGlueInfo)
+		glUsbSetState(&prGlueInfo->rHifInfo, USB_STATE_LINK_DOWN);
+	else
+		DBGLOG(HAL, ERROR, "prGlueInfo is NULL!!\n");
 
 	if (g_fgDriverProbed)
 		pfWlanRemove();
@@ -240,10 +250,11 @@ static void mtk_usb_disconnect(struct usb_interface *intf)
 	DBGLOG(HAL, STATE, "mtk_usb_disconnect() done\n");
 }
 
-int mtk_usb_suspend(struct usb_interface *intf, pm_message_t message)
+static int mtk_usb_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T)usb_get_intfdata(intf);
 	UINT_8 count = 0;
+	UINT_8 ret = 0;
 
 	DBGLOG(HAL, STATE, "mtk_usb_suspend()\n");
 
@@ -253,29 +264,36 @@ int mtk_usb_suspend(struct usb_interface *intf, pm_message_t message)
 
 	while (prGlueInfo->rHifInfo.state != USB_STATE_PRE_SUSPEND_DONE) {
 		if (count > 25) {
-			DBGLOG(HAL, ERROR, "pre_suspend timeout\n");
+			DBGLOG(HAL, ERROR, "pre_suspend timeout, return -EFAULT in the end\n");
+			ret = -EFAULT;
 			break;
 		}
 		msleep(20);
 		count++;
 	}
 
-	prGlueInfo->rHifInfo.state = USB_STATE_SUSPEND;
+	glUsbSetState(&prGlueInfo->rHifInfo, USB_STATE_SUSPEND);
 	halDisableInterrupt(prGlueInfo->prAdapter);
 	halTxCancelAllSending(prGlueInfo->prAdapter);
 
 	DBGLOG(HAL, STATE, "mtk_usb_suspend() done!\n");
 
-	/* TODO */
-	return 0;
+	if (ret && PMSG_IS_AUTO(message))
+		mtk_usb_resume(intf);
+
+	return ret;
 }
 
-int mtk_usb_resume(struct usb_interface *intf)
+static int mtk_usb_resume(struct usb_interface *intf)
 {
 	int ret = 0;
 	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T)usb_get_intfdata(intf);
 
 	DBGLOG(HAL, STATE, "mtk_usb_resume()\n");
+	if (!prGlueInfo) {
+		DBGLOG(HAL, ERROR, "prGlueInfo is NULL!\n");
+		return -EFAULT;
+	}
 
 	/* NOTE: USB bus may not really do suspend and resume*/
 	ret = usb_control_msg(prGlueInfo->rHifInfo.udev,
@@ -285,11 +303,11 @@ int mtk_usb_resume(struct usb_interface *intf)
 	if (ret)
 		DBGLOG(HAL, ERROR, "VendorRequest FeatureSetResume ERROR: %x\n", (unsigned int)ret);
 
-	prGlueInfo->rHifInfo.state = USB_STATE_PRE_RESUME;
+	glUsbSetState(&prGlueInfo->rHifInfo, USB_STATE_PRE_RESUME);
 	/* To trigger CR4 path */
 	wlanSendDummyCmd(prGlueInfo->prAdapter, FALSE);
 
-	prGlueInfo->rHifInfo.state = USB_STATE_LINK_UP;
+	glUsbSetState(&prGlueInfo->rHifInfo, USB_STATE_LINK_UP);
 	halEnableInterrupt(prGlueInfo->prAdapter);
 
 	wlanResumePmHandle(prGlueInfo);
@@ -300,7 +318,7 @@ int mtk_usb_resume(struct usb_interface *intf)
 	return 0;
 }
 
-int mtk_usb_reset_resume(struct usb_interface *intf)
+static int mtk_usb_reset_resume(struct usb_interface *intf)
 {
 	DBGLOG(HAL, STATE, "mtk_usb_reset_resume()\n");
 
@@ -345,15 +363,6 @@ int mtk_usb_vendor_request(IN P_GLUE_INFO_T prGlueInfo, IN UCHAR uEndpointAddres
 		return -EFAULT;
 	}
 
-	if (prHifInfo->state != USB_STATE_LINK_UP)
-		return -EFAULT;
-
-
-#if 0
-	if (prGlueInfo->ulFlag & GLUE_FLAG_HALT)
-		return FALSE;
-#endif
-
 	if (unlikely(TransferBufferLength > prHifInfo->vendor_req_buf_sz)) {
 		DBGLOG(REQ, ERROR, "len %u exceeds limit %zu\n", TransferBufferLength,
 			prHifInfo->vendor_req_buf_sz);
@@ -396,7 +405,7 @@ int mtk_usb_vendor_request(IN P_GLUE_INFO_T prGlueInfo, IN UCHAR uEndpointAddres
 /*!
 * \brief USB Bulk IN msg
 *
-* \param[in] prGlueInfo Pointer to the GLUE_INFO_T structure.
+* \param[in] prHifInfo  Pointer to the GL_HIF_INFO_T structure
 * \param[in] len
 * \param[in] buffer
 * \param[in] InEp
@@ -472,7 +481,7 @@ static int mtk_usb_intr_in_msg(IN P_GL_HIF_INFO_T prHifInfo, IN UINT_32 len, OUT
 /*!
 * \brief USB Bulk OUT msg
 *
-* \param[in] prGlueInfo Pointer to the GLUE_INFO_T structure.
+* \param[in] prHifInfo  Pointer to the GL_HIF_INFO_T structure
 * \param[in] len
 * \param[in] buffer
 * \param[in] OutEp
@@ -611,6 +620,10 @@ PVOID glUsbInitQ(P_GL_HIF_INFO_T prHifInfo, struct list_head *prHead, UINT_32 u4
 	INIT_LIST_HEAD(prHead);
 
 	prUsbReqs = kcalloc(u4Cnt, sizeof(struct _USB_REQ_T), GFP_ATOMIC);
+	if (!prUsbReqs) {
+		DBGLOG(HAL, ERROR, "kcalloc fail!\n");
+		return NULL;
+	}
 	prUsbReq = prUsbReqs;
 
 	for (i = 0; i < u4Cnt; ++i) {
@@ -673,6 +686,92 @@ P_USB_REQ_T glUsbDequeueReq(P_GL_HIF_INFO_T prHifInfo, struct list_head *prHead,
 
 /*----------------------------------------------------------------------------*/
 /*!
+* \brief This function borrow UsbReq from Tx data FFA queue to the spcified TC Tx data free queue
+*
+* \param[in] prHifInfo  Pointer to the GL_HIF_INFO_T structure
+* \param[in] ucTc       Specify TC index
+*
+* \retval TRUE          operation success
+* \retval FALSE         operation fail
+*/
+/*----------------------------------------------------------------------------*/
+BOOLEAN glUsbBorrowFfaReq(P_GL_HIF_INFO_T prHifInfo, UINT_8 ucTc)
+{
+	P_USB_REQ_T prUsbReq;
+
+	if (list_empty(&prHifInfo->rTxDataFfaQ))
+		return FALSE;
+	prUsbReq = list_entry(prHifInfo->rTxDataFfaQ.next, struct _USB_REQ_T, list);
+	list_del_init(prHifInfo->rTxDataFfaQ.next);
+
+	*((PUINT_8)&prUsbReq->prPriv) = FFA_MASK | ucTc;
+	list_add_tail(&prUsbReq->list, &prHifInfo->rTxDataFreeQ[ucTc]);
+
+	return TRUE;
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+* \brief This function set USB state
+*
+* \param[in] prHifInfo  Pointer to the GL_HIF_INFO_T structure
+* \param[in] state      Specify TC index
+*
+* \retval TRUE          operation success
+* \retval FALSE         operation fail
+*/
+/*----------------------------------------------------------------------------*/
+VOID glUsbSetState(P_GL_HIF_INFO_T prHifInfo, enum usb_state state)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&prHifInfo->rStateLock, flags);
+	prHifInfo->state = state;
+	spin_unlock_irqrestore(&prHifInfo->rStateLock, flags);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+* \brief This function is a wrapper of submit urb to ensure driver can transmit
+*        WiFi packet when WiFi path of device is allowed.
+*
+* \param[in] prHifInfo  Pointer to the GL_HIF_INFO_T structure
+* \param[in] type       Specify submit type
+*
+* \retval 0		Successful submissions.
+* \retval negative	Error number.
+*/
+/*----------------------------------------------------------------------------*/
+INT_32 glUsbSubmitUrb(P_GL_HIF_INFO_T prHifInfo, struct urb *urb, enum usb_submit_type type)
+{
+	unsigned long flags;
+	int ret = 0;
+
+	if (type == SUBMIT_TYPE_RX_EVENT || type == SUBMIT_TYPE_RX_DATA)
+		return usb_submit_urb(urb, GFP_ATOMIC);
+
+	spin_lock_irqsave(&prHifInfo->rStateLock, flags);
+	if (type == SUBMIT_TYPE_TX_CMD) {
+		if (!(prHifInfo->state == USB_STATE_LINK_UP || prHifInfo->state == USB_STATE_PRE_RESUME)) {
+			spin_unlock_irqrestore(&prHifInfo->rStateLock, flags);
+			DBGLOG(HAL, INFO, "WiFi path is not allowed to transmit CMD packet. (%d)\n", prHifInfo->state);
+			return -ESHUTDOWN;
+		}
+	} else if (type == SUBMIT_TYPE_TX_DATA) {
+		if (prHifInfo->state != USB_STATE_LINK_UP) {
+			spin_unlock_irqrestore(&prHifInfo->rStateLock, flags);
+			DBGLOG(HAL, INFO, "WiFi path is not allowed to transmit DATA packet. (%d)\n", prHifInfo->state);
+			return -ESHUTDOWN;
+		}
+	}
+	ret = usb_submit_urb(urb, GFP_ATOMIC);
+	spin_unlock_irqrestore(&prHifInfo->rStateLock, flags);
+
+	return ret;
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
 * \brief This function stores hif related info, which is initialized before.
 *
 * \param[in] prGlueInfo Pointer to glue info structure
@@ -730,9 +829,9 @@ VOID glSetHifInfo(P_GLUE_INFO_T prGlueInfo, ULONG ulCookie)
 
 	spin_lock_init(&prHifInfo->rTxCmdQLock);
 	spin_lock_init(&prHifInfo->rTxDataQLock);
-	spin_lock_init(&prHifInfo->rTxDataFreeQLock);
 	spin_lock_init(&prHifInfo->rRxEventQLock);
 	spin_lock_init(&prHifInfo->rRxDataQLock);
+	spin_lock_init(&prHifInfo->rStateLock);
 
 	mutex_init(&prHifInfo->vendor_req_sem);
 	prHifInfo->vendor_req_buf = kzalloc(VND_REQ_BUF_SIZE, GFP_KERNEL);
@@ -744,10 +843,10 @@ VOID glSetHifInfo(P_GLUE_INFO_T prGlueInfo, ULONG ulCookie)
 	prHifInfo->vendor_req_buf_sz = VND_REQ_BUF_SIZE;
 
 #if CFG_USB_TX_AGG
-	prHifInfo->u4AggRsvSize = 0;
-
-	for (ucTc = 0; ucTc < USB_TC_NUM; ++ucTc)
+	for (ucTc = 0; ucTc < USB_TC_NUM; ++ucTc) {
+		prHifInfo->u4AggRsvSize[ucTc] = 0;
 		init_usb_anchor(&prHifInfo->rTxDataAnchor[ucTc]);
+	}
 #else
 	init_usb_anchor(&prHifInfo->rTxDataAnchor);
 #endif
@@ -764,7 +863,11 @@ VOID glSetHifInfo(P_GLUE_INFO_T prGlueInfo, ULONG ulCookie)
 		prUsbReq->prBufCtrl->pucBuf = usb_alloc_coherent(prHifInfo->udev, USB_TX_CMD_BUF_SIZE, GFP_ATOMIC,
 								 &prUsbReq->prUrb->transfer_dma);
 #else
+#ifdef CFG_PREALLOC_MEMORY
+		prUsbReq->prBufCtrl->pucBuf = preallocGetMem(MEM_ID_TX_CMD);
+#else
 		prUsbReq->prBufCtrl->pucBuf = kmalloc(USB_TX_CMD_BUF_SIZE, GFP_ATOMIC);
+#endif
 #endif
 		if (prUsbReq->prBufCtrl->pucBuf == NULL) {
 			DBGLOG(HAL, ERROR, "kmalloc() reports error\n");
@@ -776,9 +879,40 @@ VOID glSetHifInfo(P_GLUE_INFO_T prGlueInfo, ULONG ulCookie)
 
 	glUsbInitQ(prHifInfo, &prHifInfo->rTxCmdSendingQ, 0);
 
+	/* TX Data FFA */
+	prHifInfo->arTxDataFfaReqHead = glUsbInitQ(prHifInfo,
+							&prHifInfo->rTxDataFfaQ, USB_REQ_TX_DATA_FFA_CNT);
+	i = 0;
+	list_for_each_entry_safe(prUsbReq, prUsbReqNext, &prHifInfo->rTxDataFfaQ, list) {
+		QUEUE_INITIALIZE(&prUsbReq->rSendingDataMsduInfoList);
+		*((PUINT_8)&prUsbReq->prPriv) = FFA_MASK;
+		prUsbReq->prBufCtrl = &prHifInfo->rTxDataFfaBufCtrl[i];
+#if CFG_USB_CONSISTENT_DMA
+		prUsbReq->prBufCtrl->pucBuf =
+		    usb_alloc_coherent(prHifInfo->udev, USB_TX_DATA_BUFF_SIZE, GFP_ATOMIC,
+				       &prUsbReq->prUrb->transfer_dma);
+#else
+#ifdef CFG_PREALLOC_MEMORY
+		prUsbReq->prBufCtrl->pucBuf = preallocGetMem(MEM_ID_TX_DATA_FFA);
+#else
+		prUsbReq->prBufCtrl->pucBuf = kmalloc(USB_TX_DATA_BUFF_SIZE, GFP_ATOMIC);
+#endif
+#endif
+		if (prUsbReq->prBufCtrl->pucBuf == NULL) {
+			DBGLOG(HAL, ERROR, "kmalloc() reports error\n");
+			goto error;
+		}
+		prUsbReq->prBufCtrl->u4BufSize = USB_TX_DATA_BUFF_SIZE;
+		prUsbReq->prBufCtrl->u4WrIdx = 0;
+		++i;
+	}
+
 	/* TX Data */
 #if CFG_USB_TX_AGG
 	for (ucTc = 0; ucTc < USB_TC_NUM; ++ucTc) {
+		/* Only for TC0 ~ TC3 and DBDC1_TC */
+		if (ucTc >= TC4_INDEX && ucTc < USB_DBDC1_TC)
+			continue;
 		prHifInfo->arTxDataReqHead[ucTc] = glUsbInitQ(prHifInfo,
 								&prHifInfo->rTxDataFreeQ[ucTc], USB_REQ_TX_DATA_CNT);
 		i = 0;
@@ -792,7 +926,11 @@ VOID glSetHifInfo(P_GLUE_INFO_T prGlueInfo, ULONG ulCookie)
 			    usb_alloc_coherent(prHifInfo->udev, USB_TX_DATA_BUFF_SIZE, GFP_ATOMIC,
 					       &prUsbReq->prUrb->transfer_dma);
 #else
+#ifdef CFG_PREALLOC_MEMORY
+			prUsbReq->prBufCtrl->pucBuf = preallocGetMem(MEM_ID_TX_DATA);
+#else
 			prUsbReq->prBufCtrl->pucBuf = kmalloc(USB_TX_DATA_BUFF_SIZE, GFP_ATOMIC);
+#endif
 #endif
 			if (prUsbReq->prBufCtrl->pucBuf == NULL) {
 				DBGLOG(HAL, ERROR, "kmalloc() reports error\n");
@@ -818,7 +956,11 @@ VOID glSetHifInfo(P_GLUE_INFO_T prGlueInfo, ULONG ulCookie)
 		    usb_alloc_coherent(prHifInfo->udev, USB_TX_DATA_BUF_SIZE, GFP_ATOMIC,
 				       &prUsbReq->prUrb->transfer_dma);
 #else
+#ifdef CFG_PREALLOC_MEMORY
+		prUsbReq->prBufCtrl->pucBuf = preallocGetMem(MEM_ID_TX_DATA);
+#else
 		prUsbReq->prBufCtrl->pucBuf = kmalloc(USB_TX_DATA_BUF_SIZE, GFP_ATOMIC);
+#endif
 #endif
 		if (prUsbReq->prBufCtrl->pucBuf == NULL) {
 			DBGLOG(HAL, ERROR, "kmalloc() reports error\n");
@@ -837,7 +979,11 @@ VOID glSetHifInfo(P_GLUE_INFO_T prGlueInfo, ULONG ulCookie)
 	i = 0;
 	list_for_each_entry_safe(prUsbReq, prUsbReqNext, &prHifInfo->rRxEventFreeQ, list) {
 		prUsbReq->prBufCtrl = &prHifInfo->rRxEventBufCtrl[i];
+#ifdef CFG_PREALLOC_MEMORY
+		prUsbReq->prBufCtrl->pucBuf = preallocGetMem(MEM_ID_RX_EVENT);
+#else
 		prUsbReq->prBufCtrl->pucBuf = kmalloc(USB_RX_EVENT_BUF_SIZE, GFP_ATOMIC);
+#endif
 		if (prUsbReq->prBufCtrl->pucBuf == NULL) {
 			DBGLOG(HAL, ERROR, "kmalloc() reports error\n");
 			goto error;
@@ -852,7 +998,11 @@ VOID glSetHifInfo(P_GLUE_INFO_T prGlueInfo, ULONG ulCookie)
 	i = 0;
 	list_for_each_entry_safe(prUsbReq, prUsbReqNext, &prHifInfo->rRxDataFreeQ, list) {
 		prUsbReq->prBufCtrl = &prHifInfo->rRxDataBufCtrl[i];
+#ifdef CFG_PREALLOC_MEMORY
+		prUsbReq->prBufCtrl->pucBuf = preallocGetMem(MEM_ID_RX_DATA);
+#else
 		prUsbReq->prBufCtrl->pucBuf = kmalloc(USB_RX_DATA_BUF_SIZE, GFP_ATOMIC);
+#endif
 		if (prUsbReq->prBufCtrl->pucBuf == NULL) {
 			DBGLOG(HAL, ERROR, "kmalloc() reports error\n");
 			goto error;
@@ -865,7 +1015,7 @@ VOID glSetHifInfo(P_GLUE_INFO_T prGlueInfo, ULONG ulCookie)
 	glUsbInitQ(prHifInfo, &prHifInfo->rRxEventCompleteQ, 0);
 	glUsbInitQ(prHifInfo, &prHifInfo->rRxDataCompleteQ, 0);
 
-	prHifInfo->state = USB_STATE_LINK_UP;
+	glUsbSetState(prHifInfo, USB_STATE_LINK_UP);
 
 	return;
 
@@ -896,16 +1046,19 @@ VOID glClearHifInfo(P_GLUE_INFO_T prGlueInfo)
 
 #if CFG_USB_TX_AGG
 	for (ucTc = 0; ucTc < USB_TC_NUM; ++ucTc) {
+		if (ucTc >= TC4_INDEX && ucTc < USB_DBDC1_TC)
+			continue;
 		list_for_each_entry_safe(prUsbReq, prUsbReqNext, &prHifInfo->rTxDataFreeQ[ucTc], list) {
 #if CFG_USB_CONSISTENT_DMA
 			usb_free_coherent(prHifInfo->udev, USB_TX_DATA_BUFF_SIZE,
 				prUsbReq->prBufCtrl->pucBuf, prUsbReq->prUrb->transfer_dma);
 #else
+#ifndef CFG_PREALLOC_MEMORY
 			kfree(prUsbReq->prBufCtrl->pucBuf);
+#endif
 #endif
 			usb_free_urb(prUsbReq->prUrb);
 		}
-		kfree(prHifInfo->arTxDataReqHead[ucTc]);
 	}
 #else
 	list_for_each_entry_safe(prUsbReq, prUsbReqNext, &prHifInfo->rTxDataFreeQ, list) {
@@ -913,18 +1066,34 @@ VOID glClearHifInfo(P_GLUE_INFO_T prGlueInfo)
 		usb_free_coherent(prHifInfo->udev, USB_TX_DATA_BUFF_SIZE,
 			prUsbReq->prBufCtrl->pucBuf, prUsbReq->prUrb->transfer_dma);
 #else
+#ifndef CFG_PREALLOC_MEMORY
 		kfree(prUsbReq->prBufCtrl->pucBuf);
+#endif
 #endif
 		usb_free_urb(prUsbReq->prUrb);
 	}
 #endif
+
+	list_for_each_entry_safe(prUsbReq, prUsbReqNext, &prHifInfo->rTxDataFfaQ, list) {
+#if CFG_USB_CONSISTENT_DMA
+		usb_free_coherent(prHifInfo->udev, USB_TX_DATA_BUFF_SIZE,
+			prUsbReq->prBufCtrl->pucBuf, prUsbReq->prUrb->transfer_dma);
+#else
+#ifndef CFG_PREALLOC_MEMORY
+		kfree(prUsbReq->prBufCtrl->pucBuf);
+#endif
+#endif
+		usb_free_urb(prUsbReq->prUrb);
+	}
 
 	list_for_each_entry_safe(prUsbReq, prUsbReqNext, &prHifInfo->rTxCmdFreeQ, list) {
 #if CFG_USB_CONSISTENT_DMA
 		usb_free_coherent(prHifInfo->udev, USB_TX_CMD_BUF_SIZE,
 			prUsbReq->prBufCtrl->pucBuf, prUsbReq->prUrb->transfer_dma);
 #else
+#ifndef CFG_PREALLOC_MEMORY
 		kfree(prUsbReq->prBufCtrl->pucBuf);
+#endif
 #endif
 		usb_free_urb(prUsbReq->prUrb);
 	}
@@ -950,12 +1119,16 @@ VOID glClearHifInfo(P_GLUE_INFO_T prGlueInfo)
 	}
 
 	list_for_each_entry_safe(prUsbReq, prUsbReqNext, &prHifInfo->rRxDataFreeQ, list) {
+#ifndef CFG_PREALLOC_MEMORY
 		kfree(prUsbReq->prBufCtrl->pucBuf);
+#endif
 		usb_free_urb(prUsbReq->prUrb);
 	}
 
 	list_for_each_entry_safe(prUsbReq, prUsbReqNext, &prHifInfo->rRxEventFreeQ, list) {
+#ifndef CFG_PREALLOC_MEMORY
 		kfree(prUsbReq->prBufCtrl->pucBuf);
+#endif
 		usb_free_urb(prUsbReq->prUrb);
 	}
 
@@ -970,6 +1143,9 @@ VOID glClearHifInfo(P_GLUE_INFO_T prGlueInfo)
 	}
 
 	kfree(prHifInfo->prTxCmdReqHead);
+	kfree(prHifInfo->arTxDataFfaReqHead);
+	for (ucTc = 0; ucTc < USB_TC_NUM; ++ucTc)
+		kfree(prHifInfo->arTxDataReqHead[ucTc]);
 	kfree(prHifInfo->prRxEventReqHead);
 	kfree(prHifInfo->prRxDataReqHead);
 

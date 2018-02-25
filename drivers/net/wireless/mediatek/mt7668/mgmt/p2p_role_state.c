@@ -72,13 +72,30 @@ p2pRoleStateAbort_IDLE(IN P_ADAPTER_T prAdapter,
 
 VOID p2pRoleStateInit_SCAN(IN P_ADAPTER_T prAdapter, IN UINT_8 ucBssIndex, IN P_P2P_SCAN_REQ_INFO_T prScanReqInfo)
 {
+	P_P2P_DEV_FSM_INFO_T prP2pDevFsmInfo = (P_P2P_DEV_FSM_INFO_T) NULL;
+	P_P2P_SCAN_REQ_INFO_T prDevScanReqInfo = NULL;
+
 	do {
 		ASSERT_BREAK((prAdapter != NULL) && (prScanReqInfo != NULL));
 
 		prScanReqInfo->fgIsScanRequest = TRUE;
-
+		if (prScanReqInfo->u4BufLength == 0) {
+			/* If we let u4BufLength be zero, scan module will copy the IE buf from ScanParam */
+			/* Sometime this content is from AIS, so we need copy it from P2Pdev */
+			prP2pDevFsmInfo = prAdapter->rWifiVar.prP2pDevFsmInfo;
+			if (prP2pDevFsmInfo) {
+				prDevScanReqInfo = &(prP2pDevFsmInfo->rScanReqInfo);
+				if (prDevScanReqInfo->u4BufLength != 0) {
+					/* IE Buffer */
+					kalMemCopy(prScanReqInfo->aucIEBuf, prDevScanReqInfo->aucIEBuf,
+							prDevScanReqInfo->u4BufLength);
+					prScanReqInfo->u4BufLength = prDevScanReqInfo->u4BufLength;
+					DBGLOG(P2P, TRACE, "p2pRoleStateInit_SCAN Copy p2p IE from P2P dev\n");
+				}
+			} else
+				DBGLOG(P2P, ERROR, "No prP2pDevFsmInfo ptr\n");
+		}
 		p2pFuncRequestScan(prAdapter, ucBssIndex, prScanReqInfo);
-
 	} while (FALSE);
 }				/* p2pRoleStateInit_SCAN */
 

@@ -356,7 +356,7 @@
 #endif
 
 #if (CFG_SUPPORT_SINGLE_SKU == 1)
-#define MAX_SUPPORTED_CH_COUNT (53) /*ARRAY_SIZE(mtk_2ghz_channels) + ARRAY_SIZE(mtk_5ghz_channels)*/
+#define MAX_SUPPORTED_CH_COUNT MAX_CHN_NUM
 #define REG_RULE_LIGHT(start, end, bw, reg_flags) REG_RULE(start, end, bw, 0, 0, reg_flags)
 #define TX_PWR_LIMIT_CMD_CH_NUM_THRESHOLD 32
 #endif

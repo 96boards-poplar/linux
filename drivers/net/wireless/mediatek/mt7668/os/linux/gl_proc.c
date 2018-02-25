@@ -95,6 +95,8 @@
 #define PROC_DRIVER_CMD                         "driver"
 #define PROC_CFG                                "cfg"
 #define PROC_EFUSE_DUMP                         "efuse_dump"
+#define PROC_CSI_DATA_NAME                     "csi_data"
+#define PROC_GET_TXPWR_TBL                      "get_txpwr_tbl"
 
 
 
@@ -110,6 +112,15 @@
 *                             D A T A   T Y P E S
 ********************************************************************************
 */
+
+struct PROC_CSI_FORMAT_T {
+	UINT_8 ucMagicNum;
+	UINT_8 ucCsiType;
+	UINT_16 u2Length;
+	UINT_64 u8TimeStamp;
+	INT_8 cRssi;
+	UINT_8 ucSNR;
+} __KAL_ATTRIB_PACKED__;
 
 /*******************************************************************************
 *                            P U B L I C   D A T A
@@ -144,6 +155,134 @@ static UINT_32 g_u4NextDriverReadLen;
 *                   F U N C T I O N   D E C L A R A T I O N S
 ********************************************************************************
 */
+
+static int procCsiDataOpen(struct inode *n, struct file *f)
+{
+	struct CSI_DATA_T *prCsiData = NULL;
+
+	if (g_prGlueInfo_proc && g_prGlueInfo_proc->prAdapter) {
+		prCsiData = &(g_prGlueInfo_proc->prAdapter->rCsiData);
+		prCsiData->bIncomplete = FALSE;
+		prCsiData->bIsOutputing = FALSE;
+	}
+
+	return 0;
+}
+
+static int procCsiDataRelease(struct inode *n, struct file *f)
+{
+	struct CSI_DATA_T *prCsiData = NULL;
+
+	if (g_prGlueInfo_proc && g_prGlueInfo_proc->prAdapter) {
+		prCsiData = &(g_prGlueInfo_proc->prAdapter->rCsiData);
+		prCsiData->bIncomplete = FALSE;
+		prCsiData->bIsOutputing = FALSE;
+	}
+
+	return 0;
+}
+
+static ssize_t procCsiDataPrepare(UINT_8 *buf, struct CSI_DATA_T *prCsiData)
+{
+	INT_32 i4Pos = 0;
+	enum ENUM_CSI_MODULATION_BW_TYPE_T eModulationType = CSI_TYPE_CCK_BW20;
+	struct PROC_CSI_FORMAT_T rProcCsiData;
+
+
+	if (prCsiData->ucBw == 0)
+		eModulationType = prCsiData->bIsCck ? CSI_TYPE_CCK_BW20 : CSI_TYPE_OFDM_BW20;
+	else if (prCsiData->ucBw == 1)
+		eModulationType = CSI_TYPE_OFDM_BW40;
+	else if (prCsiData->ucBw == 2)
+		eModulationType = CSI_TYPE_OFDM_BW80;
+
+	rProcCsiData.ucMagicNum = 0xAB; /* magic number */
+	rProcCsiData.ucCsiType  = eModulationType;
+	rProcCsiData.u2Length = (UINT_16) (14 + prCsiData->u2DataCount * sizeof(INT_16) * 2);
+
+	kalMemCopy(&(rProcCsiData.u8TimeStamp), &(prCsiData->u8TimeStamp), sizeof(UINT_64));
+	rProcCsiData.cRssi = prCsiData->cRssi;
+	rProcCsiData.ucSNR = prCsiData->ucSNR;
+
+	i4Pos = sizeof(rProcCsiData);
+	kalMemCopy(buf, &rProcCsiData, i4Pos);
+
+	kalMemCopy(&buf[i4Pos], prCsiData->ac2IData, prCsiData->u2DataCount * sizeof(INT_16));
+	i4Pos += prCsiData->u2DataCount * sizeof(INT_16);
+	kalMemCopy(&buf[i4Pos], prCsiData->ac2QData, prCsiData->u2DataCount * sizeof(INT_16));
+	i4Pos += prCsiData->u2DataCount * sizeof(INT_16);
+
+	return i4Pos;
+}
+
+static ssize_t procCsiDataRead(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
+{
+	UINT_8 *temp = &g_aucProcBuf[0];
+	UINT_32 u4CopySize = 0;
+	UINT_32 u4StartIdx = 0;
+	INT_32 i4Pos = 0;
+	struct CSI_DATA_T *prCsiData = NULL;
+
+	if (g_prGlueInfo_proc && g_prGlueInfo_proc->prAdapter)
+		prCsiData = &(g_prGlueInfo_proc->prAdapter->rCsiData);
+	else
+		return 0;
+
+	if (prCsiData->bIncomplete == FALSE) {
+		/*
+		 * No older CSI data in buffer waiting for reading out, so prepare a new one
+		 * for reading.
+		 */
+
+		wait_event_interruptible(prCsiData->waitq, prCsiData->u2DataCount != 0);
+
+		prCsiData->bIsOutputing = TRUE;
+
+		i4Pos = procCsiDataPrepare(temp, prCsiData);
+	}
+
+	if (prCsiData->bIncomplete == FALSE) {
+		/* The frist run of reading the CSI data */
+
+		u4StartIdx = 0;
+		if (i4Pos > count) {
+			u4CopySize = count;
+			prCsiData->u4RemainingDataSize = i4Pos - count;
+			prCsiData->u4CopiedDataSize = count;
+			prCsiData->bIncomplete = TRUE;
+		} else {
+			u4CopySize = i4Pos;
+			prCsiData->bIncomplete = FALSE;
+		}
+	} else {
+		/* Reading the remaining CSI data in the buffer */
+
+		u4StartIdx = prCsiData->u4CopiedDataSize;
+		if (prCsiData->u4RemainingDataSize > count) {
+			u4CopySize = count;
+			prCsiData->u4RemainingDataSize -= count;
+			prCsiData->u4CopiedDataSize += count;
+		} else {
+			u4CopySize = prCsiData->u4RemainingDataSize;
+			prCsiData->bIncomplete = FALSE;
+		}
+	}
+
+	if (copy_to_user(buf, &g_aucProcBuf[u4StartIdx], u4CopySize)) {
+		DBGLOG(INIT, ERROR, "copy to user failed\n");
+		return -EFAULT;
+	}
+
+	*f_pos += u4CopySize;
+
+	if (prCsiData->bIncomplete == FALSE) {
+		prCsiData->bIsOutputing = FALSE;
+		prCsiData->u2DataCount = 0;
+	}
+
+	return (ssize_t)u4CopySize;
+}
+
 static ssize_t procDbgLevelRead(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 {
 		UINT_8 *temp = &g_aucProcBuf[0];
@@ -484,12 +623,327 @@ static ssize_t procDbgLevelWrite(struct file *file, const char __user *buffer,
 	return count;
 }
 
+#define TXPWR_TABLE_ENTRY(_siso_mcs, _cdd_mcs, _mimo_mcs, _idx)	\
+{								\
+	.mcs[STREAM_SISO] = _siso_mcs,				\
+	.mcs[STREAM_CDD] = _cdd_mcs,				\
+	.mcs[STREAM_MIMO] = _mimo_mcs,				\
+	.idx = (_idx),						\
+}
+
+static struct txpwr_table_entry dsss[] = {
+	TXPWR_TABLE_ENTRY("DSSS1", "", "", PWR_DSSS_CCK),
+	TXPWR_TABLE_ENTRY("DSSS2", "", "", PWR_DSSS_CCK),
+	TXPWR_TABLE_ENTRY("CCK5", "", "", PWR_DSSS_BPKS),
+	TXPWR_TABLE_ENTRY("CCK11", "", "", PWR_DSSS_BPKS),
+};
+
+static struct txpwr_table_entry ofdm[] = {
+	TXPWR_TABLE_ENTRY("OFDM6", "OFDM6", "", PWR_OFDM_BPSK),
+	TXPWR_TABLE_ENTRY("OFDM9", "OFDM9", "", PWR_OFDM_BPSK),
+	TXPWR_TABLE_ENTRY("OFDM12", "OFDM12", "", PWR_OFDM_QPSK),
+	TXPWR_TABLE_ENTRY("OFDM18", "OFDM18", "", PWR_OFDM_QPSK),
+	TXPWR_TABLE_ENTRY("OFDM24", "OFDM24", "", PWR_OFDM_16QAM),
+	TXPWR_TABLE_ENTRY("OFDM36", "OFDM36", "", PWR_OFDM_16QAM),
+	TXPWR_TABLE_ENTRY("OFDM48", "OFDM48", "", PWR_OFDM_48Mbps),
+	TXPWR_TABLE_ENTRY("OFDM54", "OFDM54", "", PWR_OFDM_54Mbps),
+};
+
+static struct txpwr_table_entry ht[] = {
+	TXPWR_TABLE_ENTRY("MCS0", "MCS0", "MCS8", PWR_HT_BPSK),
+	TXPWR_TABLE_ENTRY("MCS1", "MCS1", "MCS9", PWR_HT_QPSK),
+	TXPWR_TABLE_ENTRY("MCS2", "MCS2", "MCS10", PWR_HT_QPSK),
+	TXPWR_TABLE_ENTRY("MCS3", "MCS3", "MCS11", PWR_HT_16QAM),
+	TXPWR_TABLE_ENTRY("MCS4", "MCS4", "MCS12", PWR_HT_16QAM),
+	TXPWR_TABLE_ENTRY("MCS5", "MCS5", "MCS13", PWR_HT_MCS5),
+	TXPWR_TABLE_ENTRY("MCS6", "MCS6", "MCS14", PWR_HT_MCS6),
+	TXPWR_TABLE_ENTRY("MCS7", "MCS7", "MCS15", PWR_HT_MCS7),
+};
+
+static struct txpwr_table_entry vht[] = {
+	TXPWR_TABLE_ENTRY("MCS0", "MCS0", "MCS0", PWR_VHT20_BPSK),
+	TXPWR_TABLE_ENTRY("MCS1", "MCS1", "MCS1", PWR_VHT20_QPSK),
+	TXPWR_TABLE_ENTRY("MCS2", "MCS2", "MCS2", PWR_VHT20_QPSK),
+	TXPWR_TABLE_ENTRY("MCS3", "MCS3", "MCS3", PWR_VHT20_16QAM),
+	TXPWR_TABLE_ENTRY("MCS4", "MCS4", "MCS4", PWR_VHT20_16QAM),
+	TXPWR_TABLE_ENTRY("MCS5", "MCS5", "MCS5", PWR_VHT20_64QAM),
+	TXPWR_TABLE_ENTRY("MCS6", "MCS6", "MCS6", PWR_VHT20_64QAM),
+	TXPWR_TABLE_ENTRY("MCS7", "MCS7", "MCS7", PWR_VHT20_MCS7),
+	TXPWR_TABLE_ENTRY("MCS8", "MCS8", "MCS8", PWR_VHT20_MCS8),
+	TXPWR_TABLE_ENTRY("MCS9", "MCS9", "MCS9", PWR_VHT20_MCS9),
+};
+
+static struct txpwr_table txpwr_tables[] = {
+	{"Legacy", dsss, ARRAY_SIZE(dsss)},
+	{"11g", ofdm, ARRAY_SIZE(ofdm)},
+	{"11a", ofdm, ARRAY_SIZE(ofdm)},
+	{"HT20", ht, ARRAY_SIZE(ht)},
+	{"HT40", ht, ARRAY_SIZE(ht)},
+	{"VHT20", vht, ARRAY_SIZE(vht)},
+	{"VHT40", vht, ARRAY_SIZE(vht)},
+	{"VHT80", vht, ARRAY_SIZE(vht)},
+};
+
+#define TMP_SZ (448)
+#define CDD_PWR_OFFSET (6)
+void print_txpwr_tbl(struct txpwr_table *txpwr_tbl, unsigned char ch,
+		     unsigned char *tx_pwr[], char pwr_offset[],
+		     char *stream_buf[], unsigned int stream_pos[])
+{
+	struct txpwr_table_entry *tmp_tbl = txpwr_tbl->tables;
+	unsigned int idx, pwr_idx, stream_idx;
+	char pwr[TXPWR_TBL_NUM] = {0}, tmp_pwr = 0;
+	char prefix[5], tmp[4];
+	char *buf = NULL;
+	unsigned int *pos = NULL;
+	int i;
+
+	for (i = 0; i < txpwr_tbl->n_tables; i++) {
+		idx = tmp_tbl[i].idx;
+
+		for (pwr_idx = 0; pwr_idx < TXPWR_TBL_NUM; pwr_idx++) {
+			if (!tx_pwr[pwr_idx]) {
+				DBGLOG(REQ, WARN,
+				       "Power table[%d] is NULL\n", pwr_idx);
+				return;
+			}
+			pwr[pwr_idx] = tx_pwr[pwr_idx][idx] +
+				       pwr_offset[pwr_idx];
+			pwr[pwr_idx] = (pwr[pwr_idx] > MAX_TX_POWER) ?
+				       MAX_TX_POWER : pwr[pwr_idx];
+		}
+
+		for (stream_idx = 0; stream_idx < STREAM_NUM; stream_idx++) {
+			buf = stream_buf[stream_idx];
+			pos = &stream_pos[stream_idx];
+
+			if (tmp_tbl[i].mcs[stream_idx][0] == '\0')
+				continue;
+
+			switch (stream_idx) {
+			case STREAM_SISO:
+				kalStrnCpy(prefix, "siso", sizeof(prefix));
+				break;
+			case STREAM_CDD:
+				kalStrnCpy(prefix, "cdd", sizeof(prefix));
+				break;
+			case STREAM_MIMO:
+				kalStrnCpy(prefix, "mimo", sizeof(prefix));
+				break;
+			default:
+				break;
+			}
+
+			*pos += kalScnprintf(buf + *pos, TMP_SZ - *pos,
+					     "%s, %d, %s, %s, ",
+					     prefix, ch,
+					     txpwr_tbl->phy_mode,
+					     tmp_tbl[i].mcs[stream_idx]);
+
+			for (pwr_idx = 0; pwr_idx < TXPWR_TBL_NUM; pwr_idx++) {
+				/* The target power of cdd less
+				 * 3dBm than siso
+				 */
+				tmp_pwr = (pwr_idx == MAC_TBL &&
+					   stream_idx == STREAM_CDD) ?
+					  pwr[pwr_idx] - CDD_PWR_OFFSET :
+					  pwr[pwr_idx];
+
+				tmp_pwr = (tmp_pwr > 0) ? tmp_pwr : 0;
+
+				if (pwr_idx + 1 == TXPWR_TBL_NUM)
+					kalStrnCpy(tmp, "\n", sizeof(tmp));
+				else
+					kalStrnCpy(tmp, ", ", sizeof(tmp));
+				*pos += kalScnprintf(buf + *pos, TMP_SZ - *pos,
+						     "%d.%d%s",
+						     tmp_pwr / 2,
+						     tmp_pwr % 2 * 5,
+						     tmp);
+
+			}
+		}
+	}
+}
+
+static ssize_t procGetTxpwrTblRead(struct file *filp, char __user *buf,
+				   size_t count, loff_t *f_pos)
+{
+	P_GLUE_INFO_T prGlueInfo = NULL;
+	P_ADAPTER_T prAdapter = NULL;
+	P_BSS_INFO_T prBssInfo = NULL;
+	unsigned char ucBssIndex;
+	P_NETDEV_PRIVATE_GLUE_INFO prNetDevPrivate = NULL;
+	WLAN_STATUS status;
+	struct PARAM_CMD_GET_TXPWR_TBL pwr_tbl;
+	struct POWER_LIMIT *tx_pwr_tbl = pwr_tbl.tx_pwr_tbl;
+	char *buffer;
+	unsigned int pos = 0, buf_len = count, oid_len;
+	unsigned char i, j;
+	char *stream_buf[STREAM_NUM] = {NULL};
+	unsigned int stream_pos[STREAM_NUM] = {0};
+	unsigned char *tx_pwr[TXPWR_TBL_NUM] =  {NULL};
+	char pwr_offset[TXPWR_TBL_NUM] = {0};
+	unsigned char offset = 0;
+	int ret;
+
+	/* if *f_ops>0, we should return 0 to make cat command exit */
+	if (*f_pos > 0)
+		return 0;
+
+	prGlueInfo = g_prGlueInfo_proc;
+	if (!prGlueInfo)
+		return -EFAULT;
+	prAdapter = prGlueInfo->prAdapter;
+	prNetDevPrivate = (P_NETDEV_PRIVATE_GLUE_INFO) netdev_priv(gPrDev);
+	if (prNetDevPrivate->prGlueInfo != prGlueInfo)
+		return -EFAULT;
+	ucBssIndex = prNetDevPrivate->ucBssIdx;
+	prBssInfo = prAdapter->aprBssInfo[ucBssIndex];
+	if (!prBssInfo)
+		return -EFAULT;
+
+	kalMemZero(&pwr_tbl, sizeof(pwr_tbl));
+
+	if (prAdapter->rWifiVar.fgDbDcModeEn)
+		pwr_tbl.ucDbdcIdx = prBssInfo->eDBDCBand;
+	else
+		pwr_tbl.ucDbdcIdx = ENUM_BAND_0;
+
+	status = kalIoctl(prGlueInfo,
+			  wlanoidGetTxPwrTbl,
+			  &pwr_tbl,
+			  sizeof(pwr_tbl), TRUE, FALSE, TRUE, &oid_len);
+
+	if (status != WLAN_STATUS_SUCCESS) {
+		DBGLOG(REQ, WARN, "Query Tx Power Table fail\n");
+		return -EINVAL;
+	}
+
+	buffer = (char *) kalMemAlloc(buf_len, VIR_MEM_TYPE);
+	if (!buf)
+		return -ENOMEM;
+
+	for (i = 0; i < STREAM_NUM; i++) {
+		stream_buf[i] = (char *) kalMemAlloc(TMP_SZ, VIR_MEM_TYPE);
+		if (!stream_buf[i]) {
+			ret = -ENOMEM;
+			goto out;
+		}
+	}
+
+	pos = kalScnprintf(buffer, buf_len,
+			   "\n%s",
+			   "spatial stream, Channel, bw, modulation, ");
+	pos += kalScnprintf(buffer + pos, buf_len - pos,
+			   "%s\n",
+			   "regulatory limit, board limit, target power");
+
+	for (i = 0; i < ARRAY_SIZE(txpwr_tables); i++) {
+		for (j = 0; j < STREAM_NUM; j++) {
+			kalMemZero(stream_buf[j], TMP_SZ);
+			stream_pos[j] = 0;
+		}
+
+		for (j = 0; j < TXPWR_TBL_NUM; j++) {
+			tx_pwr[j] = NULL;
+			pwr_offset[j] = 0;
+		}
+
+		switch (i) {
+		case DSSS:
+			if (pwr_tbl.ucCenterCh > 14)
+				continue;
+			for (j = 0; j < TXPWR_TBL_NUM; j++)
+				tx_pwr[j] = tx_pwr_tbl[j].tx_pwr_dsss;
+			break;
+		case OFDM_24G:
+			if (pwr_tbl.ucCenterCh > 14)
+				continue;
+			for (j = 0; j < TXPWR_TBL_NUM; j++)
+				tx_pwr[j] = tx_pwr_tbl[j].tx_pwr_ofdm;
+			break;
+		case OFDM_5G:
+			if (pwr_tbl.ucCenterCh <= 14)
+				continue;
+			for (j = 0; j < TXPWR_TBL_NUM; j++)
+				tx_pwr[j] = tx_pwr_tbl[j].tx_pwr_ofdm;
+			break;
+		case HT20:
+			for (j = 0; j < TXPWR_TBL_NUM; j++)
+				tx_pwr[j] = tx_pwr_tbl[j].tx_pwr_ht20;
+			break;
+		case HT40:
+			for (j = 0; j < TXPWR_TBL_NUM; j++)
+				tx_pwr[j] = tx_pwr_tbl[j].tx_pwr_ht40;
+			break;
+		case VHT20:
+			if (pwr_tbl.ucCenterCh <= 14)
+				continue;
+			for (j = 0; j < TXPWR_TBL_NUM; j++)
+				tx_pwr[j] = tx_pwr_tbl[j].tx_pwr_vht20;
+			break;
+		case VHT40:
+		case VHT80:
+			if (pwr_tbl.ucCenterCh <= 14)
+				continue;
+			offset = (i == VHT40) ?
+				 PWR_Vht40_OFFSET : PWR_Vht80_OFFSET;
+			for (j = 0; j < TXPWR_TBL_NUM; j++) {
+				tx_pwr[j] = tx_pwr_tbl[j].tx_pwr_vht20;
+				pwr_offset[j] =
+					tx_pwr_tbl[j].tx_pwr_vht_OFST[offset];
+				/* Covert 7bit 2'complement value to 8bit */
+				pwr_offset[j] |= (pwr_offset[j] & BIT(6)) ?
+						 BIT(7) : 0;
+			}
+			break;
+		default:
+			break;
+		}
+
+		print_txpwr_tbl(&txpwr_tables[i], pwr_tbl.ucCenterCh,
+				 tx_pwr, pwr_offset,
+				 stream_buf, stream_pos);
+
+		for (j = 0; j < STREAM_NUM; j++) {
+			pos += kalScnprintf(buffer + pos, buf_len - pos,
+					    "%s",
+					    stream_buf[j]);
+		}
+	}
+
+	if (copy_to_user(buf, buffer, pos)) {
+		DBGLOG(INIT, ERROR, "copy to user failed\n");
+		ret = -EFAULT;
+		goto out;
+	}
+
+	*f_pos += pos;
+	ret = pos;
+out:
+	for (i = 0; i < STREAM_NUM; i++) {
+		if (stream_buf[i])
+			kalMemFree(stream_buf[i], VIR_MEM_TYPE, TMP_SZ);
+	}
+	kalMemFree(buffer, VIR_MEM_TYPE, buf_len);
+	return ret;
+}
 
 static const struct file_operations dbglevel_ops = {
 	.owner = THIS_MODULE,
 	.read = procDbgLevelRead,
 	.write = procDbgLevelWrite,
 };
+
+
+static const struct file_operations csidata_ops = {
+	.owner = THIS_MODULE,
+	.read = procCsiDataRead,
+	.open = procCsiDataOpen,
+	.release = procCsiDataRelease,
+};
+
 
 #if WLAN_INCLUDE_PROC
 #if	CFG_SUPPORT_EASY_DEBUG
@@ -515,6 +969,11 @@ static const struct file_operations cfg_ops = {
 };
 #endif
 #endif
+
+static const struct file_operations get_txpwr_tbl_ops = {
+	.owner	 = THIS_MODULE,
+	.read = procGetTxpwrTblRead,
+};
 
 /*******************************************************************************
 *                              F U N C T I O N S
@@ -831,6 +1290,8 @@ INT_32 procRemoveProcfs(VOID)
 	remove_proc_entry(PROC_DBG_LEVEL_NAME, gprProcRoot);
 	remove_proc_entry(PROC_CFG, gprProcRoot);
 	remove_proc_entry(PROC_EFUSE_DUMP, gprProcRoot);
+	remove_proc_entry(PROC_CSI_DATA_NAME, gprProcRoot);
+	remove_proc_entry(PROC_GET_TXPWR_TBL, gprProcRoot);
 
 #if CFG_SUPPORT_DEBUG_FS
 	remove_proc_entry(PROC_ROAM_PARAM, gprProcRoot);
@@ -885,12 +1346,23 @@ INT_32 procCreateFsEntry(P_GLUE_INFO_T prGlueInfo)
 	}
 #endif
 
+	prEntry = proc_create(PROC_GET_TXPWR_TBL, 0664, gprProcRoot,
+			      &get_txpwr_tbl_ops);
+	if (prEntry == NULL) {
+		DBGLOG(INIT, ERROR, "Unable to create /proc entry efuse\n\r");
+		return -1;
+	}
+
 	prEntry = proc_create(PROC_DBG_LEVEL_NAME, 0664, gprProcRoot, &dbglevel_ops);
 		if (prEntry == NULL) {
 			DBGLOG(INIT, ERROR, "Unable to create /proc entry dbgLevel\n\r");
 			return -1;
 		}
-
+	prEntry = proc_create(PROC_CSI_DATA_NAME, 0664, gprProcRoot, &csidata_ops);
+	if (prEntry == NULL) {
+		DBGLOG(INIT, ERROR, "Unable to create /proc entry csidata\n\r");
+		return -1;
+	}
 	return 0;
 }
 

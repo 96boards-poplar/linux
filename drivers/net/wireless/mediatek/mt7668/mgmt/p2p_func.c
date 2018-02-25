@@ -643,6 +643,19 @@ p2pFuncStartGO(IN P_ADAPTER_T prAdapter,
 #if (CFG_SUPPORT_DFS_MASTER == 1)
 	P_CMD_RDD_ON_OFF_CTRL_T prCmdRddOnOffCtrl;
 #endif
+
+#ifdef CFG_SUPPORT_P2P_OPEN_SECURITY
+		BOOLEAN fgIsOpenP2P = TRUE;
+#else
+		BOOLEAN fgIsOpenP2P = FALSE;
+#endif
+
+#ifdef CFG_SUPPORT_P2P_PROBERESP_RATE1M
+		BOOLEAN fgIs1MProbeResp = TRUE;
+#else
+		BOOLEAN fgIs1MProbeResp = FALSE;
+#endif
+
 	do {
 		ASSERT_BREAK((prAdapter != NULL) && (prBssInfo != NULL));
 
@@ -706,7 +719,8 @@ p2pFuncStartGO(IN P_ADAPTER_T prAdapter,
 			/* Depend on eBand */
 			prBssInfo->ucPhyTypeSet = (prAdapter->rWifiVar.ucAvailablePhyTypeSet & PHY_TYPE_SET_802_11AN);
 			prBssInfo->ucConfigAdHocAPMode = AP_MODE_11A;	/* Depend on eCurrentOPMode and ucPhyTypeSet */
-		} else if (prP2pConnReqInfo->eConnRequest == P2P_CONNECTION_TYPE_PURE_AP) {
+		} else if ((prP2pConnReqInfo->eConnRequest == P2P_CONNECTION_TYPE_PURE_AP) ||
+			   fgIs1MProbeResp) {
 			/* Depend on eBand */
 			prBssInfo->ucPhyTypeSet = (prAdapter->rWifiVar.ucAvailablePhyTypeSet & PHY_TYPE_SET_802_11BGN);
 			/* Depend on eCurrentOPMode and ucPhyTypeSet */
@@ -730,7 +744,7 @@ p2pFuncStartGO(IN P_ADAPTER_T prAdapter,
 		prBssInfo->u2OperationalRateSet =
 		    rNonHTPhyAttributes[prBssInfo->ucNonHTBasicPhyType].u2SupportedRateSet;
 
-		if (prBssInfo->ucAllSupportedRatesLen == 0) {
+		if ((prBssInfo->ucAllSupportedRatesLen == 0) || fgIs1MProbeResp) {
 			rateGetDataRatesFromRateSet(prBssInfo->u2OperationalRateSet,
 						    prBssInfo->u2BSSBasicRateSet,
 						    prBssInfo->aucAllSupportedRates,
@@ -743,10 +757,12 @@ p2pFuncStartGO(IN P_ADAPTER_T prAdapter,
 		/* 3 <2> Update BSS_INFO_T common part */
 #if CFG_SUPPORT_AAA
 		prBssInfo->fgIsProtection = FALSE;
-		if (prP2pConnReqInfo->eConnRequest == P2P_CONNECTION_TYPE_GO) {
-			prBssInfo->fgIsProtection = TRUE;	/* Always enable protection at P2P GO */
+		/* Always enable protection at P2P GO But OOBE AP */
+		if ((prP2pConnReqInfo->eConnRequest == P2P_CONNECTION_TYPE_GO) && (!fgIsOpenP2P)) {
+			prBssInfo->fgIsProtection = TRUE;
 		} else {
-			ASSERT(prP2pConnReqInfo->eConnRequest == P2P_CONNECTION_TYPE_PURE_AP);
+			if (!fgIsOpenP2P)
+				ASSERT(prP2pConnReqInfo->eConnRequest == P2P_CONNECTION_TYPE_PURE_AP);
 			if (kalP2PGetCipher(prAdapter->prGlueInfo, (UINT_8) prBssInfo->u4PrivateData))
 				prBssInfo->fgIsProtection = TRUE;
 		}
@@ -1209,18 +1225,18 @@ VOID p2pFuncDfsSwitchCh(IN P_ADAPTER_T prAdapter, IN P_BSS_INFO_T prBssInfo, IN 
 					prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef);
 	DBGLOG(P2P, INFO, "p2pFuncDfsSwitchCh: Update to OS Done\n");
 
-	if (prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef->chan)
-		cnmMemFree(prGlueInfo->prAdapter,
-			prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef->chan);
+	if (prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef) {
+		if (prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef->chan) {
+			cnmMemFree(prGlueInfo->prAdapter,
+				prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef->chan);
+			prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef->chan = NULL;
+		}
 
-	prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef->chan = NULL;
-
-	if (prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef)
 		cnmMemFree(prGlueInfo->prAdapter,
 			prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef);
-
-	prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef = NULL;
-}				/* p2pFuncDfsSwitchCh */
+		prGlueInfo->prP2PInfo[prP2pRoleFsmInfo->ucRoleIndex]->chandef = NULL;
+	}
+} /* p2pFuncDfsSwitchCh */
 
 BOOLEAN p2pFuncCheckWeatherRadarBand(IN P_P2P_CHNL_REQ_INFO_T prChnlReqInfo)
 {
@@ -1647,6 +1663,39 @@ p2pFuncBeaconUpdate(IN P_ADAPTER_T prAdapter,
 
 	return rWlanStatus;
 }				/* p2pFuncBeaconUpdate */
+
+/*----------------------------------------------------------------------------*/
+/*!
+* \brief    This function is to update extra IEs (ex: WPS) for assoc resp.
+*           Caller should sanity check the params.
+*
+* \param[in] prAdapter      Pointer of ADAPTER_T
+* \param[in] prP2pBssInfo   Pointer to BSS_INFO_T structure
+* \param[in] AssocRespIE    Pointer to extra IEs for assoc resp
+* \param[in] u4AssocRespLen Length of extra IEs for assoc resp
+*
+* \return WLAN_STATUS
+*/
+/*----------------------------------------------------------------------------*/
+
+WLAN_STATUS
+p2pFuncAssocRespUpdate(IN P_ADAPTER_T prAdapter,
+		    IN P_BSS_INFO_T prP2pBssInfo,
+		    IN PUINT_8 AssocRespIE, IN UINT_32 u4AssocRespLen)
+{
+	UINT_8 ucOuiType = 0;
+	UINT_16 u2SubTypeVersion = 0;
+
+	if (!rsnParseCheckForWFAInfoElem(prAdapter, AssocRespIE, &ucOuiType, &u2SubTypeVersion))
+		return WLAN_STATUS_FAILURE;
+
+	if (ucOuiType == VENDOR_OUI_TYPE_WPS) {
+		kalP2PUpdateWSC_IE(prAdapter->prGlueInfo, 3, (PUINT_8)AssocRespIE, IE_SIZE(AssocRespIE),
+			(UINT_8) (prP2pBssInfo->u4PrivateData));
+	}
+
+	return WLAN_STATUS_SUCCESS;
+}
 
 #endif
 
@@ -2292,6 +2341,40 @@ BOOLEAN p2pFuncValidateAssocReq(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwRfb,
 	return fgReplyAssocResp;
 
 }				/* p2pFuncValidateAssocReq */
+
+/*----------------------------------------------------------------------------*/
+/*!
+* @brief This function is used to check the TKIP IE
+*
+*
+* @return none
+*/
+/*----------------------------------------------------------------------------*/
+BOOLEAN p2pFuncParseCheckForTKIPInfoElem(IN PUINT_8 pucBuf)
+{
+	UINT_8 aucWfaOui[] = VENDOR_OUI_WFA;
+	P_WPA_INFO_ELEM_T prWpaIE = (P_WPA_INFO_ELEM_T) NULL;
+	UINT_32 u4GroupKeyCipher = 0;
+
+	if (pucBuf == NULL)
+		return FALSE;
+
+	prWpaIE = (P_WPA_INFO_ELEM_T) pucBuf;
+
+	if (prWpaIE->ucLength <= ELEM_MIN_LEN_WFA_OUI_TYPE_SUBTYPE)
+		return FALSE;
+
+	if (kalMemCmp(prWpaIE->aucOui, aucWfaOui, sizeof(aucWfaOui)))
+		return FALSE;
+
+	WLAN_GET_FIELD_32(&prWpaIE->u4GroupKeyCipherSuite, &u4GroupKeyCipher);
+
+	if (prWpaIE->ucOuiType == VENDOR_OUI_TYPE_WPA &&
+		u4GroupKeyCipher == WPA_CIPHER_SUITE_TKIP)
+		return TRUE;
+	else
+		return FALSE;
+}				/* p2pFuncParseCheckForP2PInfoElem */
 
 /*----------------------------------------------------------------------------*/
 /*!
@@ -4054,9 +4137,13 @@ p2pFuncComposeBeaconProbeRspTemplate(IN P_ADAPTER_T prAdapter,
 				cnmMgtPktFree(prAdapter, prP2pProbeRspInfo->prProbeRspMsduTemplate);
 
 			prP2pProbeRspInfo->prProbeRspMsduTemplate = cnmMgtPktAlloc(prAdapter, u4BcnBufLen);
+			if (!prP2pProbeRspInfo->prProbeRspMsduTemplate) {
+				DBGLOG(P2P, ERROR, "cnmMgtPktAlloc fail!\n");
+				rWlanStatus = WLAN_STATUS_FAILURE;
+				break;
+			}
 
 			prMsduInfo = prP2pProbeRspInfo->prProbeRspMsduTemplate;
-
 			prMsduInfo->eSrc = TX_PACKET_MGMT;
 			prMsduInfo->ucStaRecIndex = 0xFF;
 			prMsduInfo->ucBssIndex = prP2pBssInfo->ucBssIndex;

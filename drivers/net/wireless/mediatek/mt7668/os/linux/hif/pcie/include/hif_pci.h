@@ -86,8 +86,6 @@
 #define RX_BUFFER_NORMSIZE			3840
 #define TX_BUFFER_NORMSIZE			3840
 
-#define TX_TOKEN_FLOW_CONTROL 200
-
 #define INC_RING_INDEX(_idx, _RingSize) \
 { \
 	(_idx) = (_idx+1) % (_RingSize); \

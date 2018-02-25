@@ -1202,7 +1202,7 @@ bssSendBeaconProbeResponse(IN P_ADAPTER_T prAdapter,
 	TX_SET_MMPDU(prAdapter,
 		     prMsduInfo,
 		     ucBssIndex,
-		     STA_REC_INDEX_BMCAST,
+		     STA_REC_INDEX_NOT_FOUND,
 		     WLAN_MAC_MGMT_HEADER_LEN,
 		     (WLAN_MAC_MGMT_HEADER_LEN + TIMESTAMP_FIELD_LEN + BEACON_INTERVAL_FIELD_LEN +
 		      CAP_INFO_FIELD_LEN), NULL, MSDU_RATE_MODE_AUTO);
@@ -1218,6 +1218,10 @@ bssSendBeaconProbeResponse(IN P_ADAPTER_T prAdapter,
 			prIeArray[i].pfnAppendIE(prAdapter, prMsduInfo);
 
 	}
+
+	/* Set limited retry count and lifetime for Probe Resp is reasonable */
+	nicTxSetPktLifeTime(prMsduInfo, 100);
+	nicTxSetPktRetryLimit(prMsduInfo, 2);
 
 	/* TODO(Kevin): Also release the unused tail room of the composed MMPDU */
 

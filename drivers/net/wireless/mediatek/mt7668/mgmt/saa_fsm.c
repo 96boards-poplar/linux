@@ -90,7 +90,6 @@
 *                           P R I V A T E   D A T A
 ********************************************************************************
 */
-#if !DBG_DISABLE_ALL_LOG
 static PUINT_8 apucDebugAAState[AA_STATE_NUM] = {
 	(PUINT_8) DISP_STRING("AA_IDLE"),
 	(PUINT_8) DISP_STRING("SAA_SEND_AUTH1"),
@@ -104,7 +103,6 @@ static PUINT_8 apucDebugAAState[AA_STATE_NUM] = {
 	(PUINT_8) DISP_STRING("AAA_SEND_ASSOC2"),
 	(PUINT_8) DISP_STRING("AA_RESOURCE")
 };
-#endif
 
 /*******************************************************************************
 *                                 M A C R O S
@@ -419,7 +417,7 @@ saaFsmSendEventJoinComplete(IN P_ADAPTER_T prAdapter,
 	}
 #endif
 	else {
-		ASSERT(0);
+		DBGLOG(SAA, ERROR, "Invalid case in %s.\n", __func__);
 		return WLAN_STATUS_FAILURE;
 	}
 

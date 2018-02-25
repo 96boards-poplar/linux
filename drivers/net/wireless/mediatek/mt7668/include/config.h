@@ -153,7 +153,9 @@
 						/* 0: Disable */
 
 #define CFG_SUPPORT_RRM             0	/* Radio Reasource Measurement (802.11k) */
+#ifndef CFG_SUPPORT_DFS
 #define CFG_SUPPORT_DFS             1	/* DFS (802.11h) */
+#endif
 #ifndef CFG_SUPPORT_DFS_MASTER
 #define CFG_SUPPORT_DFS_MASTER      1
 #endif
@@ -299,6 +301,14 @@
 #define CFG_USB_TX_HANDLE_IN_HIF_THREAD             0
 #define CFG_USB_RX_HANDLE_IN_HIF_THREAD             0
 
+#ifndef CFG_TX_DIRECT_USB
+#define CFG_TX_DIRECT_USB                           1
+#endif
+#ifndef CFG_RX_DIRECT_USB
+#define CFG_RX_DIRECT_USB                           1
+#endif
+
+#define CFG_HW_WMM_BY_BSS                           1
 /*------------------------------------------------------------------------------
  * Flags and Parameters for Integration
  *------------------------------------------------------------------------------
@@ -310,10 +320,9 @@
 #define CFG_REPORT_RFBB_VERSION     1
 
 #define HW_BSSID_NUM                4	/* HW BSSID number by chip */
+#define HW_WMM_NUM                  4	/* HW WMM number by chip */
 
-#if (MTK_WCN_HIF_SDIO)
-#define CFG_CHIP_RESET_SUPPORT          1
-#else
+#ifndef CFG_CHIP_RESET_SUPPORT
 #define CFG_CHIP_RESET_SUPPORT          0
 #endif
 
@@ -421,7 +430,7 @@
 #define CFG_RAW_BUFFER_SIZE                      1024
 
 /*! Maximum size of IE buffer of each SCAN record */
-#define CFG_IE_BUFFER_SIZE                      512
+#define CFG_IE_BUFFER_SIZE                      800
 
 /*------------------------------------------------------------------------------
  * Flags and Parameters for Power management
@@ -451,7 +460,7 @@
   * Auto Channel Selection maximun channel number
   *------------------------------------------------------------------------------
   */
-#define MAX_CHN_NUM                             49 /* ARRAY_SIZE(mtk_5ghz_channels) + ARRAY_SIZE(mtk_2ghz_channels) */
+#define MAX_CHN_NUM                             39 /* ARRAY_SIZE(mtk_5ghz_channels) + ARRAY_SIZE(mtk_2ghz_channels) */
 #define MAX_2G_BAND_CHN_NUM                     14
 #define MAX_5G_BAND_CHN_NUM                     (MAX_CHN_NUM - MAX_2G_BAND_CHN_NUM)
 
@@ -534,6 +543,15 @@
  * Flags of Wi-Fi Direct support
  *------------------------------------------------------------------------------
  */
+/*------------------------------------------------------------------------------
+ * Support reporting all BSS networks to cfg80211 kernel when scan
+ * request is from P2P interface
+ * Originally only P2P networks will be reported when scan request is from p2p0
+ *------------------------------------------------------------------------------
+ */
+#ifndef CFG_P2P_SCAN_REPORT_ALL_BSS
+#define CFG_P2P_SCAN_REPORT_ALL_BSS            0
+#endif
 
 /*------------------------------------------------------------------------------
  * Flags for GTK rekey offload
@@ -666,7 +684,9 @@
 #define CFG_SUPPORT_UAPSD           1
 #define CFG_SUPPORT_UL_PSMP         0
 
+#ifndef CFG_SUPPORT_ROAMING
 #define CFG_SUPPORT_ROAMING         1	/* Roaming System */
+#endif
 #if (CFG_SUPPORT_ROAMING == 1)
 
 /* Roaming feature: skip roaming when only one ESSID AP
@@ -821,6 +841,21 @@
 #define CFG_SUPPORT_MSP				1
 
 
+/*------------------------------------------------------------------------------
+ * Flags of Drop Packet Replay SUPPORT
+ *------------------------------------------------------------------------------
+ */
+#define CFG_SUPPORT_REPLAY_DETECTION		1
+
+/*------------------------------------------------------------------------------
+ * Flags of Last Second MCS Tx/Rx Info
+ *------------------------------------------------------------------------------
+ */
+#define CFG_SUPPORT_LAST_SEC_MCS_INFO	1
+#if CFG_SUPPORT_LAST_SEC_MCS_INFO
+#define MCS_INFO_SAMPLE_CNT			10
+#endif
+
 
 /*------------------------------------------------------------------------------
  * Flags of driver fw customization
@@ -828,6 +863,7 @@
  */
 
 #define CFG_SUPPORT_EASY_DEBUG               1
+#define CFG_SUPPORT_FW_DBG_LEVEL_CTRL        1
 
 
 /*------------------------------------------------------------------------------
@@ -902,7 +938,7 @@
  * Support CFG_SISO_SW_DEVELOP
  *------------------------------------------------------------------------------
  */
-#define CFG_SISO_SW_DEVELOP			0
+#define CFG_SISO_SW_DEVELOP			1
 
 /*------------------------------------------------------------------------------
  * Support antenna selection
@@ -949,6 +985,24 @@
  *------------------------------------------------------------------------------
  */
 #define CFG_SUPPORT_ADVANCE_CONTROL 1
+
+
+/*------------------------------------------------------------------------------
+ * Driver pre-allocate total size of memory in one time
+ *------------------------------------------------------------------------------
+ */
+#ifndef CFG_PRE_ALLOCATION_IO_BUFFER
+#define CFG_PRE_ALLOCATION_IO_BUFFER 0
+#endif
+
+
+/*------------------------------------------------------------------------------
+ * Support scan with channels specified
+ *------------------------------------------------------------------------------
+ */
+#ifndef CFG_SCAN_CHANNEL_SPECIFIED
+#define CFG_SCAN_CHANNEL_SPECIFIED 1
+#endif
 
 /*******************************************************************************
 *                             D A T A   T Y P E S

@@ -835,6 +835,10 @@ VOID qmInitRxQueues(IN P_ADAPTER_T prAdapter);
 
 P_SW_RFB_T qmFlushRxQueues(IN P_ADAPTER_T prAdapter);
 
+P_QUE_T qmDetermineStaTxQueue(IN P_ADAPTER_T prAdapter, IN P_MSDU_INFO_T prMsduInfo, OUT PUINT_8 pucTC);
+
+VOID qmSetTxPacketDescTemplate(IN P_ADAPTER_T prAdapter, IN P_MSDU_INFO_T prMsduInfo);
+
 P_SW_RFB_T qmHandleRxPackets(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwRfbListHead);
 
 VOID qmProcessPktWithReordering(IN P_ADAPTER_T prAdapter, IN P_SW_RFB_T prSwRfb, OUT P_QUE_T prReturnedQue);
@@ -948,6 +952,12 @@ VOID mqmHandleBaActionFrame(P_ADAPTER_T prAdapter, P_SW_RFB_T prSwRfb);
 #endif
 
 VOID qmResetTcControlResource(IN P_ADAPTER_T prAdapter);
+
+#if CFG_SUPPORT_REPLAY_DETECTION
+BOOLEAN qmHandleRxReplay(P_ADAPTER_T prAdapter, P_SW_RFB_T prSwRfb);
+BOOLEAN qmRxDetectReplay(PUINT_8 pucPNS, PUINT_8 pucPNT);
+#endif
+
 /*******************************************************************************
  *                              F U N C T I O N S
  ********************************************************************************

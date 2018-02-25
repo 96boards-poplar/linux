@@ -341,6 +341,7 @@ struct _BSS_INFO_T {
 				*/
 	BOOLEAN fgIsNetAbsent;	/* TRUE: BSS is absent, FALSE: BSS is present */
 
+	BOOLEAN fgIsWepCipherGroup;
 	UINT_32 u4RsnSelectedGroupCipher;
 	UINT_32 u4RsnSelectedPairwiseCipher;
 	UINT_32 u4RsnSelectedAKMSuite;
@@ -368,6 +369,9 @@ struct _BSS_INFO_T {
 	UINT_8 aucCWmaxLog2ForBcast[WMM_AC_INDEX_NUM];	/* For AP mode, broadcast the CWmaxLog2 */
 	AC_QUE_PARMS_T arACQueParmsForBcast[WMM_AC_INDEX_NUM];	/* For AP mode, broadcast the value */
 	UINT_8 ucWmmQueSet;
+#if (CFG_HW_WMM_BY_BSS == 1)
+	BOOLEAN fgIsWmmInited;
+#endif
 
     /*------------------------------------------------------------------------*/
 	/* 802.11n HT operation IE when (prStaRec->ucPhyTypeSet & PHY_TYPE_BIT_HT) */
@@ -479,6 +483,11 @@ struct _BSS_INFO_T {
 	/* AP PMF */
 	struct AP_PMF_CFG rApPmfCfg;
 #endif
+
+#if CFG_SUPPORT_REPLAY_DETECTION
+	struct SEC_DETECT_REPLAY_INFO rDetRplyInfo;
+#endif
+
 };
 
 struct _AIS_SPECIFIC_BSS_INFO_T {
@@ -692,6 +701,8 @@ typedef struct _WIFI_VAR_T {
 	UINT_8 ucTxGf;
 	UINT_8 ucRxGf;
 
+	UINT_8 ucMCS32;
+
 	UINT_8 ucTxopPsTx;
 	UINT_8 ucSigTaRts;
 	UINT_8 ucDynBwRts;
@@ -807,7 +818,12 @@ typedef struct _WIFI_VAR_T {
 	UINT_8 ucWowOnMdtim; /* multiple DTIM if WOW enable, default 1 */
 	UINT_8 ucWowOffMdtim; /* multiple DTIM if WOW disable, default 3 */
 	UINT_8 ucWowPwsMode; /* when enter wow, automatically enter wow power-saving profile */
+	UINT_8 ucListenDtimInterval; /* adjust the listen interval by dtim interval */
 	UINT_8 ucEapolOffload; /* eapol offload when active mode / wow mode */
+
+#if CFG_SUPPORT_REPLAY_DETECTION
+	UINT_8 ucRpyDetectOffload; /* eapol offload when active mode / wow mode */
+#endif
 
 	UINT_8 u4SwTestMode;
 	UINT_8	ucCtrlFlagAssertPath;
@@ -834,6 +850,9 @@ typedef struct _WIFI_VAR_T {
 
 	BOOLEAN fgTdlsBufferSTASleep; /* Support TDLS 5.5.4.2 optional case */
 	BOOLEAN fgChipResetRecover;
+
+	UINT_8 ucN9Log2HostCtrl;
+	UINT_8 ucCR4Log2HostCtrl;
 
 #if CFG_SUPPORT_ANT_SELECT
 	UINT_8  ucSpeIdxCtrl;   /* 0:WF0, 1:WF1, 2: both WF0/1 */
@@ -916,6 +935,24 @@ typedef struct _WIFI_FEM_CFG_T {
 	/* Reserved  */
 	UINT_32 au4Reserved[4];
 } WIFI_FEM_CFG_T, *P_WIFI_FEM_CFG_T;
+
+struct CSI_DATA_T {
+	UINT_8 ucBw;
+	BOOLEAN bIsCck;
+	UINT_16 u2DataCount;
+	INT_16 ac2IData[256];
+	INT_16 ac2QData[256];
+	UINT_8 ucDbdcIdx;
+	INT_8 cRssi;
+	UINT_8 ucSNR;
+	UINT_64 u8TimeStamp;
+	UINT_8 ucDataOutputted; /* bit 0: I data, bit 1: Q data. Set to 1 if it's ouputted */
+	BOOLEAN bIsOutputing;
+	BOOLEAN bIncomplete;
+	INT_32 u4CopiedDataSize;
+	INT_32 u4RemainingDataSize;
+	wait_queue_head_t waitq;
+};
 
 /*
  * Major ADAPTER structure
@@ -1010,6 +1047,22 @@ struct _ADAPTER_T {
 
 	UINT_32 u4PwrCtrlBlockCnt;
 
+	/* TX Direct related : BEGIN */
+	BOOLEAN fgTxDirectInited;
+
+	#define TX_DIRECT_CHECK_INTERVAL	(1000 * HZ / USEC_PER_SEC)
+	struct timer_list rTxDirectSkbTimer; /* check if an empty MsduInfo is available */
+	struct timer_list rTxDirectHifTimer; /* check if HIF port is ready to accept a new Msdu */
+
+	struct sk_buff_head rTxDirectSkbQueue;
+	QUE_T rTxDirectHifQueue[TX_PORT_NUM];
+
+	QUE_T rStaPsQueue[CFG_STA_REC_NUM];
+	UINT_32 u4StaPsBitmap;
+	QUE_T rBssAbsentQueue[HW_BSSID_NUM + 1];
+	UINT_32 u4BssAbsentBitmap;
+	/* TX Direct related : END */
+
 	QUE_T rPendingCmdQueue;
 
 #if CFG_SUPPORT_MULTITHREAD
@@ -1044,6 +1097,7 @@ struct _ADAPTER_T {
 
 #if CFG_ENABLE_WIFI_DIRECT
 	BOOLEAN fgIsP2PRegistered;
+	BOOLEAN p2p_scan_report_all_bss; /* flag to report all networks in p2p scan */
 	ENUM_NET_REG_STATE_T rP2PNetRegState;
 	/* BOOLEAN             fgIsWlanLaunched; */
 	P_P2P_INFO_T prP2pInfo;
@@ -1073,6 +1127,11 @@ struct _ADAPTER_T {
 
 #if CFG_SUPPORT_MSP
 	EVENT_WLAN_INFO rEventWlanInfo;
+#endif
+
+#if CFG_SUPPORT_LAST_SEC_MCS_INFO
+	TIMER_T rRxMcsInfoTimer;
+	BOOLEAN fgIsMcsInfoValid;
 #endif
 
 	EVENT_LINK_QUALITY rLinkQuality;
@@ -1118,6 +1177,12 @@ struct _ADAPTER_T {
 
 	UINT_32 u4CtiaPowerMode;
 	BOOLEAN fgEnCtiaPowerMode;
+
+	/* Bitmap is defined as #define KEEP_FULL_PWR_{FEATURE}_BIT in wlan_lib.h
+	 * Each feature controls KeepFullPwr(CMD_ID_KEEP_FULL_PWR) should
+	 * register bitmap to ensure low power during suspend.
+	 */
+	UINT_32 u4IsKeepFullPwrBitmap;
 
 	UINT_32 fgEnArpFilter;
 
@@ -1187,6 +1252,11 @@ struct _ADAPTER_T {
 	/* COEX feature */
 	UINT_32 u4FddMode;
 
+#if (CFG_EFUSE_BUFFER_MODE_DELAY_CAL == 1)
+	/* MAC address Efuse Offset */
+	UINT_32 u4EfuseMacAddrOffset;
+#endif
+
 #if CFG_WOW_SUPPORT
 	WOW_CTRL_T	rWowCtrl;
 #endif
@@ -1203,13 +1273,22 @@ struct _ADAPTER_T {
 	BOOLEAN fgIsSupportGetFreeEfuseBlockCount;
 	BOOLEAN fgIsSupportQAAccessEfuse;
 	BOOLEAN fgIsSupportPowerOnSendBufferModeCMD;
+	BOOLEAN fgIsBufferBinExtract;
 	BOOLEAN fgIsSupportGetTxPower;
 	BOOLEAN fgIsEnableLpdvt;
 
 	/* SER related info */
 	UINT_8 ucSerState;
 
+#if (CFG_HW_WMM_BY_BSS == 1)
+	UINT_8 ucHwWmmEnBit;
+#endif
 	WIFI_FEM_CFG_T rWifiFemCfg;
+	struct CSI_DATA_T rCsiData;
+
+	UINT_8 ucRModeOnlyFlag;
+	UINT_8 ucRModeReserve[7];
+
 };				/* end of _ADAPTER_T */
 
 /*******************************************************************************

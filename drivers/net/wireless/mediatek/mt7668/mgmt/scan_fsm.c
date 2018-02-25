@@ -94,12 +94,10 @@ UINT_8 g_aucScanChannelMDRDY[SCN_SCAN_DONE_PRINT_BUFFER_LENGTH];
 *                           P R I V A T E   D A T A
 ********************************************************************************
 */
-#if !DBG_DISABLE_ALL_LOG
 static PUINT_8 apucDebugScanState[SCAN_STATE_NUM] = {
 	(PUINT_8) DISP_STRING("IDLE"),
 	(PUINT_8) DISP_STRING("SCANNING"),
 };
-#endif
 
 /*******************************************************************************
 *                                 M A C R O S
@@ -293,6 +291,7 @@ VOID scnSendScanReqV2(IN P_ADAPTER_T prAdapter)
 	rCmdScanReq.ucBssIndex = prScanParam->ucBssIndex;
 	rCmdScanReq.ucScanType = (UINT_8) prScanParam->eScanType;
 	rCmdScanReq.ucSSIDType = prScanParam->ucSSIDType;
+	rCmdScanReq.ucSSIDNum = prScanParam->ucSSIDNum;
 
 	for (i = 0; i < prScanParam->ucSSIDNum; i++) {
 		COPY_SSID(rCmdScanReq.arSSID[i].aucSsid,
@@ -700,12 +699,15 @@ VOID scnEventScanDone(IN P_ADAPTER_T prAdapter, IN P_EVENT_SCAN_DONE prScanDone,
 					kalMemZero(g_aucScanChannelMDRDY, SCN_SCAN_DONE_PRINT_BUFFER_LENGTH);
 					u4PrintfIdx = 0;
 				}
-				kalSprintf(g_aucScanChannelNum + u4PrintfIdx*7, "%7d",
-					prScanInfo->aucChannelNum[u4ChCnt]);
-				kalSprintf(g_aucScanChannelIdleTime + u4PrintfIdx*7, "%7d",
-					prScanInfo->au2ChannelIdleTime[u4ChCnt]);
-				kalSprintf(g_aucScanChannelMDRDY + u4PrintfIdx*7, "%7d",
-					prScanInfo->aucChannelMDRDYCnt[u4ChCnt]);
+				kalSnprintf(g_aucScanChannelNum + u4PrintfIdx * 7,
+					sizeof(g_aucScanChannelNum) - u4PrintfIdx * 7,
+					"%7d", prScanInfo->aucChannelNum[u4ChCnt]);
+				kalSnprintf(g_aucScanChannelIdleTime + u4PrintfIdx * 7,
+					sizeof(g_aucScanChannelIdleTime) - u4PrintfIdx * 7,
+					"%7d", prScanInfo->au2ChannelIdleTime[u4ChCnt]);
+				kalSnprintf(g_aucScanChannelMDRDY + u4PrintfIdx * 7,
+					sizeof(g_aucScanChannelMDRDY) - u4PrintfIdx * 7,
+					"%7d", prScanInfo->aucChannelMDRDYCnt[u4ChCnt]);
 				u4PrintfIdx++;
 			}
 

@@ -157,6 +157,7 @@ BOOLEAN p2pLaunch(P_GLUE_INFO_T prGlueInfo)
 	}
 
 	prGlueInfo->prAdapter->fgIsP2PRegistered = TRUE;
+	prGlueInfo->prAdapter->p2p_scan_report_all_bss = CFG_P2P_SCAN_REPORT_ALL_BSS;
 	DBGLOG(P2P, INFO, "Launch success, fgIsP2PRegistered TRUE\n");
 	return TRUE;
 }
@@ -218,6 +219,7 @@ BOOLEAN p2pRemove(P_GLUE_INFO_T prGlueInfo)
 
 	DBGLOG(P2P, INFO, "fgIsP2PRegistered FALSE\n");
 	prGlueInfo->prAdapter->fgIsP2PRegistered = FALSE;
+	prGlueInfo->prAdapter->p2p_scan_report_all_bss = FALSE;
 	glUnregisterP2P(prGlueInfo);
 	return TRUE;
 }

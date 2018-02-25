@@ -1263,12 +1263,15 @@ TdlsDataFrameSend_DISCOVERY_REQ(ADAPTER_T *prAdapter,
 		 *  FTIE
 		 *  Timeout Interval
 		 */
-		if (ucActionCode != TDLS_FRM_ACTION_CONFIRM) {
+
+		if (ucActionCode != TDLS_FRM_ACTION_CONFIRM && ucActionCode != TDLS_FRM_ACTION_DISCOVERY_REQ) {
 			/* 3. Frame Formation - (4) Capability: 0x31 0x04, privacy bit will be set */
 			u2CapInfo = assocBuildCapabilityInfo(prAdapter, prStaRec);
 			WLAN_SET_FIELD_16(pPkt, u2CapInfo);
 			LR_TDLS_FME_FIELD_FILL(2);
+		}
 
+		if (ucActionCode != TDLS_FRM_ACTION_CONFIRM) {
 			/* 4. Append general IEs */
 			/*
 			 *  TODO check HT: prAdapter->rWifiVar.rConnSettings.uc2G4BandwidthMode
@@ -1558,6 +1561,7 @@ TdlsDataFrameSend_DISCOVERY_RSP(ADAPTER_T *prAdapter,
 	TDLS_LINK_IDENTIFIER_IE(pPkt)->ucLength = 18;
 
 	kalMemCopy(TDLS_LINK_IDENTIFIER_IE(pPkt)->aBSSID, prBssInfo->aucBSSID, 6);
+
 
 
 	/* peer is initiator */
@@ -1947,6 +1951,26 @@ TdlsSendChSwControlCmd(P_ADAPTER_T prAdapter, PVOID pvSetBuffer, UINT_32 u4SetBu
 	return TDLS_STATUS_SUCCESS;
 }
 
+WLAN_STATUS
+TdlsTxCtrl(P_ADAPTER_T prAdapter, P_BSS_INFO_T prBssInfo, BOOLEAN fgEnable)
+{
+	int i;
+	P_STA_RECORD_T prStaRec;
+
+	for (i = 0; i < CFG_STA_REC_NUM; i++) {
+		prStaRec = &prAdapter->arStaRec[i];
+
+		if (prStaRec->eStaType != STA_TYPE_DLS_PEER)
+			continue;
+
+		if (prStaRec->fgIsInUse && prStaRec->ucBssIndex == prBssInfo->ucBssIndex) {
+			qmSetStaRecTxAllowed(prAdapter, prStaRec, fgEnable);
+			DBGLOG(TDLS, EVENT, "TDLS STA[%d], TX ctrl=%d\n", i, fgEnable);
+		}
+	}
+
+	return TDLS_STATUS_SUCCESS;
+}
 #endif /* CFG_SUPPORT_TDLS */
 
 /* End of tdls.c */

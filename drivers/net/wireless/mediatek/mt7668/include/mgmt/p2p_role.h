@@ -103,9 +103,12 @@ typedef struct _MSG_P2P_BEACON_UPDATE_T {
 	UINT_8 ucRoleIndex;
 	UINT_32 u4BcnHdrLen;
 	UINT_32 u4BcnBodyLen;
+	UINT_32 u4AssocRespLen;
 	PUINT_8 pucBcnHdr;
 	PUINT_8 pucBcnBody;
-	UINT_8 aucBuffer[1];	/* Header & Body are put here. */
+	PUINT_8 pucAssocRespIE;
+	BOOLEAN fgIsWepCipher;
+	UINT_8 aucBuffer[1];	/* Header & Body & Extra IEs are put here. */
 } MSG_P2P_BEACON_UPDATE_T, *P_MSG_P2P_BEACON_UPDATE_T;
 
 typedef struct _MSG_P2P_MGMT_FRAME_UPDATE_T {

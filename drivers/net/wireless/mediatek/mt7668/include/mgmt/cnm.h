@@ -79,6 +79,8 @@
 #define DBDC_5G_WMM_INDEX	0
 #define DBDC_2G_WMM_INDEX	1
 #endif
+#define MAX_HW_WMM_INDEX	(HW_WMM_NUM - 1)
+#define DEFAULT_HW_WMM_INDEX (MAX_HW_WMM_INDEX - 1)
 /*******************************************************************************
 *                             D A T A   T Y P E S
 ********************************************************************************
@@ -245,6 +247,11 @@ P_BSS_INFO_T cnmGetBssInfoAndInit(P_ADAPTER_T prAdapter, ENUM_NETWORK_TYPE_T eNe
 VOID cnmFreeBssInfo(P_ADAPTER_T prAdapter, P_BSS_INFO_T prBssInfo);
 #if CFG_SUPPORT_CHNL_CONFLICT_REVISE
 BOOLEAN cnmAisDetectP2PChannel(P_ADAPTER_T prAdapter, P_ENUM_BAND_T prBand, PUINT_8 pucPrimaryChannel);
+#endif
+
+#if (CFG_HW_WMM_BY_BSS == 1)
+UINT_8 cnmWmmIndexDecision(IN P_ADAPTER_T prAdapter, IN P_BSS_INFO_T prBssInfo);
+VOID cnmFreeWmmIndex(IN P_ADAPTER_T prAdapter, IN P_BSS_INFO_T prBssInfo);
 #endif
 
 #if CFG_SUPPORT_DBDC

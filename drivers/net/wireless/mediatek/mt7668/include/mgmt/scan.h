@@ -724,4 +724,10 @@ P_BSS_DESC_T scanSearchBssDescByBssidAndLatestUpdateTime(IN P_ADAPTER_T prAdapte
 VOID scanReportScanResultToAgps(P_ADAPTER_T prAdapter);
 #endif
 
+#if CFG_SCAN_CHANNEL_SPECIFIED
+static inline bool is_valid_scan_chnl_cnt(UINT_8 num)
+{
+	return (num && num < MAXIMUM_OPERATION_CHANNEL_LIST);
+}
+#endif
 #endif /* _SCAN_H */

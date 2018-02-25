@@ -1061,6 +1061,10 @@ P_BSS_INFO_T cnmGetBssInfoAndInit(P_ADAPTER_T prAdapter, ENUM_NETWORK_TYPE_T eNe
 			prBssInfo->ucBssIndex = ucBssIndex;
 			prBssInfo->eNetworkType = eNetworkType;
 			prBssInfo->ucOwnMacIndex = ucOwnMacIdx;
+#if (CFG_HW_WMM_BY_BSS == 1)
+			prBssInfo->ucWmmQueSet = DEFAULT_HW_WMM_INDEX;
+			prBssInfo->fgIsWmmInited = FALSE;
+#endif
 			break;
 		}
 	}
@@ -1126,8 +1130,30 @@ VOID cnmUpdateDbdcSetting(IN P_ADAPTER_T prAdapter, IN BOOLEAN fgDbdcEn)
 	DBGLOG(CNM, INFO, "DBDC %s\n", fgDbdcEn ? "Enable" : "Disable");
 
 	/* Parameter decision */
+#if (CFG_HW_WMM_BY_BSS == 1)
+	if (fgDbdcEn) {
+		UINT_8 ucWmmSetBitmapPerBSS;
+		/*
+		 * As DBDC enabled, for BSS use 2.4g Band, assign related WmmGroupSet bitmask to 1.
+		 * This is used to indicate the WmmGroupSet is associated to Band#1 (otherwise, use for band#0)
+		 */
+		for (ucBssIndex = 0; ucBssIndex < BSS_INFO_NUM; ucBssIndex++) {
+			prBssInfo = prAdapter->aprBssInfo[ucBssIndex];
+
+			if (!prBssInfo || prBssInfo->fgIsInUse == FALSE)
+				continue;
+
+			if (prBssInfo->eBand == BAND_2G4) {
+				ucWmmSetBitmapPerBSS = prBssInfo->ucWmmQueSet;
+				ucWmmSetBitmap |= BIT(ucWmmSetBitmapPerBSS);
+			}
+		}
+		ucWmmSetBitmap |= BIT(MAX_HW_WMM_INDEX); /* For P2P Device*/
+	}
+#else
 	if (fgDbdcEn)
 		ucWmmSetBitmap |= BIT(DBDC_2G_WMM_INDEX);
+#endif
 
 	/* Send event to FW */
 	prCmdBody = (P_CMD_DBDC_SETTING_T)&rDbdcSetting;
@@ -1246,11 +1272,14 @@ VOID cnmGetDbdcCapability(
 	/* BSS index */
 	prDbdcCap->ucBssIndex = ucBssIndex;
 
+#if (CFG_HW_WMM_BY_BSS == 0)
 	/* WMM set */
 	if (eRfBand == BAND_5G)
 		prDbdcCap->ucWmmSetIndex = DBDC_5G_WMM_INDEX;
 	else
-		prDbdcCap->ucWmmSetIndex = DBDC_2G_WMM_INDEX;
+		prDbdcCap->ucWmmSetIndex =
+			(prAdapter->rWifiVar.ucDbdcMode == DBDC_MODE_DISABLED) ? DBDC_5G_WMM_INDEX : DBDC_2G_WMM_INDEX;
+#endif
 
 	/* Nss & band 0/1 */
 	switch (prAdapter->rWifiVar.ucDbdcMode) {
@@ -1471,3 +1500,44 @@ VOID cnmDbdcDecision(IN P_ADAPTER_T prAdapter, IN ULONG plParamPtr)
 
 #endif /*CFG_SUPPORT_DBDC*/
 
+#if (CFG_HW_WMM_BY_BSS == 1)
+/*----------------------------------------------------------------------------*/
+/*!
+* @brief    Search available HW WMM index.
+*
+* @param (none)
+*
+* @return
+*/
+/*----------------------------------------------------------------------------*/
+UINT_8 cnmWmmIndexDecision(IN P_ADAPTER_T prAdapter, IN P_BSS_INFO_T prBssInfo)
+{
+	UINT_8 ucWmmIndex;
+
+	for (ucWmmIndex = 0; ucWmmIndex < HW_WMM_NUM; ucWmmIndex++) {
+		if (prBssInfo && prBssInfo->fgIsInUse && prBssInfo->fgIsWmmInited == FALSE) {
+			if (!(prAdapter->ucHwWmmEnBit & BIT(ucWmmIndex))) {
+				prAdapter->ucHwWmmEnBit |= BIT(ucWmmIndex);
+				prBssInfo->fgIsWmmInited = TRUE;
+				break;
+			}
+		}
+	}
+	return (ucWmmIndex < HW_WMM_NUM) ? ucWmmIndex : MAX_HW_WMM_INDEX;
+}
+/*----------------------------------------------------------------------------*/
+/*!
+* @brief    Free BSS HW WMM index.
+*
+* @param (none)
+*
+* @return None
+*/
+/*----------------------------------------------------------------------------*/
+VOID cnmFreeWmmIndex(IN P_ADAPTER_T prAdapter, IN P_BSS_INFO_T prBssInfo)
+{
+	prAdapter->ucHwWmmEnBit &= (~BIT(prBssInfo->ucWmmQueSet));
+	prBssInfo->ucWmmQueSet = DEFAULT_HW_WMM_INDEX;
+	prBssInfo->fgIsWmmInited = FALSE;
+}
+#endif /* #if (CFG_HW_WMM_BY_BSS == 1) */

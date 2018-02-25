@@ -357,11 +357,11 @@ PVOID cnmMemAlloc(IN P_ADAPTER_T prAdapter, IN ENUM_RAM_TYPE_T eRamType, IN UINT
 		ASSERT(u4BlockNum <= MAX_NUM_OF_BUF_BLOCKS);
 	}
 
+	KAL_ACQUIRE_SPIN_LOCK(prAdapter, eRamType == RAM_TYPE_MSG ? SPIN_LOCK_MSG_BUF : SPIN_LOCK_MGT_BUF);
+
 #if CFG_DBG_MGT_BUF
 	prBufInfo->u4AllocCount++;
 #endif
-
-	KAL_ACQUIRE_SPIN_LOCK(prAdapter, eRamType == RAM_TYPE_MSG ? SPIN_LOCK_MSG_BUF : SPIN_LOCK_MGT_BUF);
 
 	if ((u4BlockNum > 0) && (u4BlockNum <= MAX_NUM_OF_BUF_BLOCKS)) {
 
@@ -392,6 +392,10 @@ PVOID cnmMemAlloc(IN P_ADAPTER_T prAdapter, IN ENUM_RAM_TYPE_T eRamType, IN UINT
 		}
 	}
 
+#if CFG_DBG_MGT_BUF
+	prBufInfo->u4AllocNullCount++;
+#endif
+
 	/* kalMemAlloc() shall not included in spin_lock */
 	KAL_RELEASE_SPIN_LOCK(prAdapter, eRamType == RAM_TYPE_MSG ? SPIN_LOCK_MSG_BUF : SPIN_LOCK_MGT_BUF);
 
@@ -402,10 +406,8 @@ PVOID cnmMemAlloc(IN P_ADAPTER_T prAdapter, IN ENUM_RAM_TYPE_T eRamType, IN UINT
 #endif
 
 #if CFG_DBG_MGT_BUF
-	prBufInfo->u4AllocNullCount++;
-
 	if (pvMemory)
-		prAdapter->u4MemAllocDynamicCount++;
+		GLUE_INC_REF_CNT(prAdapter->u4MemAllocDynamicCount);
 #endif
 
 	return pvMemory;
@@ -461,7 +463,7 @@ VOID cnmMemFree(IN P_ADAPTER_T prAdapter, IN PVOID pvMemory)
 #endif
 
 #if CFG_DBG_MGT_BUF
-		prAdapter->u4MemFreeDynamicCount++;
+		GLUE_INC_REF_CNT(prAdapter->u4MemFreeDynamicCount);
 #endif
 		return;
 	}
