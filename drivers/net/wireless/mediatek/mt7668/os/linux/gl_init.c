@@ -1066,14 +1066,13 @@ VOID wlanDebugInit(VOID)
 
 	for (i = 0; i < DBG_MODULE_NUM; i++) {
 		aucDebugModule[i] = DBG_CLASS_ERROR |
-			DBG_CLASS_WARN | DBG_CLASS_STATE | DBG_CLASS_EVENT | DBG_CLASS_INFO;
+			DBG_CLASS_WARN | DBG_CLASS_STATE | DBG_CLASS_EVENT/* | DBG_CLASS_INFO*/;
 	}
 	aucDebugModule[DBG_TX_IDX] &= ~(DBG_CLASS_EVENT | DBG_CLASS_INFO);
 	aucDebugModule[DBG_RX_IDX] &= ~(DBG_CLASS_EVENT | DBG_CLASS_INFO);
 	aucDebugModule[DBG_REQ_IDX] &= ~(DBG_CLASS_EVENT | DBG_CLASS_INFO);
 	aucDebugModule[DBG_INTR_IDX] = 0;
 	aucDebugModule[DBG_MEM_IDX] = DBG_CLASS_ERROR | DBG_CLASS_WARN;
-	aucDebugModule[DBG_REQ_IDX] = DBG_CLASS_MASK;
 
 #endif
 #endif /* DBG */
