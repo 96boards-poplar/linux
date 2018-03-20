@@ -80,6 +80,9 @@
 #include "gl_kal.h"
 #endif
 #include "gl_vendor.h"
+#include <linux/gpio.h>
+
+#define HI_WIFI_RESET_GPIO    (ARCH_NR_GPIOS - 4 * 8 + 5) /* GPIO3_5 */
 
 /*******************************************************************************
 *                              C O N S T A N T S
@@ -2801,6 +2804,19 @@ static int initWlan(void)
 	int ret = 0;
 
 	DBGLOG(INIT, INFO, "initWlan\n");
+
+#ifdef HI_WIFI_RESET_GPIO
+	if (gpio_is_valid(HI_WIFI_RESET_GPIO)) {
+		ret = gpio_request(HI_WIFI_RESET_GPIO, "WiFi reset control");
+		if (ret < 0)
+			DBGLOG(INIT, ERROR, "unable to requeset gpio");
+		else {
+			gpio_direction_output(HI_WIFI_RESET_GPIO, 0);
+			mdelay(5);
+			gpio_direction_output(HI_WIFI_RESET_GPIO, 1);
+		}
+	}
+#endif
 
 #ifdef CFG_DRIVER_INF_NAME_CHANGE
 
