@@ -357,7 +357,6 @@ config BT_QCOMSMD
 config HISI_BT_POWER
 	tristate "HiSilicon Bluetooth Power Control"
 	depends on ARCH_HISI && RFKILL
-	default m
 	help
 	  Provides a parameter to switch on/off power from PMIC
 	  to Bluetooth device.
