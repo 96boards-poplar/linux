@@ -46,9 +46,6 @@
 			&rgmii1_p1_pmx_cfg
 			&rgmii1_p2_pmx_cfg
 			&rgmii1_p3_pmx_cfg
-			&sdio0_p1_pmx0_cfg
-			&sdio0_p2_pmx0_cfg
-			&sdio0_p3_pmx0_cfg
 		>;
 
 	emmc_p1_pmx_cfg: emmc_p1_pmx_cfg {
