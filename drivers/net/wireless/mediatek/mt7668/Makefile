@@ -115,6 +115,9 @@ ccflags-y += $(PLATFORM_FLAGS)
 endif
 
 obj-$(CONFIG_MT7668) += $(MODULE_NAME).o
+ifeq ($(CONFIG_MT7668), m)
+EXTRA_LDFLAGS += --strip-debug
+endif
 
 # ---------------------------------------------------
 # Directory List
