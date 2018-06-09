@@ -16233,7 +16233,9 @@ HI_S32 HI_DRV_VDEC_ChanBufferInit(HI_HANDLE hHandle, HI_U32 u32BufSize, HI_HANDL
     if (HI_INVALID_HANDLE == hDmxVidChn)
     {
 	stBuf.u32Size = u32BufSize;
-	s32Ret = HI_DRV_VDEC_CreateStrmBuf(hHandle & 0xff, &stBuf);
+	stBuf.hHandle = HI_INVALID_HANDLE;
+	stBuf.hVdec = hHandle & 0xff;
+	s32Ret = HI_DRV_VDEC_CreateStrmBuf(stBuf.hVdec, &stBuf);
 
 	if (HI_SUCCESS != s32Ret)
 	{
